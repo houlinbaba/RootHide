@@ -1842,6 +1842,17 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
         self.customGlassSystemLabel.text = verified
             ? [NSString stringWithFormat:@"iOS %@ · Supporter", UIDevice.currentDevice.systemVersion]
             : [NSString stringWithFormat:@"iOS %@", UIDevice.currentDevice.systemVersion];
+
+    if (self.jailbreakBtn) {
+        BOOL isJailbroken = [[DOEnvironmentManager sharedManager] isJailbroken] || [[DOEnvironmentManager sharedManager] isJailbrokenWithOtherJailbreak];
+        BOOL isSupported = [[DOEnvironmentManager sharedManager] isSupported];
+        self.jailbreakBtn.enabled = !isJailbroken && isSupported && verified;
+        CGFloat jailbreakContentAlpha = self.jailbreakBtn.enabled ? 1.0 : 0.70;
+        self.jailbreakBtn.alpha = 1.0;
+        if ([self.jailbreakBtn respondsToSelector:@selector(button)]) {
+            self.jailbreakBtn.button.alpha = jailbreakContentAlpha;
+        }
+    }
 }
 
 - (void)supporterLicenseDidChange:(NSNotification *)notification
@@ -2182,6 +2193,10 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
         jailbreakButtonImage = [UIImage systemImageNamed:@"lock.slash" withConfiguration:[DOGlobalAppearance smallIconImageConfiguration]];
     
     self.jailbreakBtn = [[DOJailbreakButton alloc] initWithAction: [UIAction actionWithTitle:jailbreakButtonTitle image:jailbreakButtonImage identifier:@"jailbreak" handler:^(__kindof UIAction * _Nonnull action) {
+        if (!DORHSupporterIsVerified()) {
+            [self showSupporterOnlyHint];
+            return;
+        }
 
 
 /********************************** roothide specific ************************************/
@@ -2209,7 +2224,7 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
         [self startJailbreak];
         
     }]];
-    self.jailbreakBtn.enabled = !isJailbroken && isSupported;
+    self.jailbreakBtn.enabled = !isJailbroken && isSupported && DORHSupporterIsVerified();
 
     [self.view addSubview:self.jailbreakBtn];
 
@@ -3069,6 +3084,10 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
     __block DOCustomLiquidGlassView *jailbreakEmphasisGlass = nil;
 
     self.jailbreakBtn = [[DOJailbreakButton alloc] initWithAction:[UIAction actionWithTitle:jailbreakButtonTitle image:jailbreakButtonImage identifier:@"jailbreak" handler:^(__kindof UIAction * _Nonnull action) {
+        if (!DORHSupporterIsVerified()) {
+            [self showSupporterOnlyHint];
+            return;
+        }
 /********************************** roothide specific ************************************/
         if (otherJailbreakActived(false)) {
             UIAlertController *alertController = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Error") message:DOLocalizedString(@"Your device currently has another jailbreak activated, please reboot device.") preferredStyle:UIAlertControllerStyleAlert];
@@ -3098,7 +3117,7 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
 
         [self startJailbreak];
     }]];
-    self.jailbreakBtn.enabled = !isJailbroken && isSupported;
+    self.jailbreakBtn.enabled = !isJailbroken && isSupported && DORHSupporterIsVerified();
 
     // DOJailbreakButton dims its entire view when disabled. Keep the V2.2
     // material itself at full strength and dim only the button content.
