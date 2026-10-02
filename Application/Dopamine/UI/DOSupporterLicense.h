@@ -517,16 +517,36 @@ DORHSupporterCopyOrCreateDevicePrivateKey(BOOL *created,
     }
 
     if (lookupStatus != errSecItemNotFound) {
-        if (existingItem)
-            CFRelease(existingItem);
+        if (lookupStatus == -34018) {
+            // TrollStore缺失自定义AccessGroup权限，旧版创建的key会触发-34018，清理后当作未找到走新建流程
+            @try {
+                NSDictionary *oldGroupQuery = @{
+                    (__bridge id)kSecClass: (__bridge id)kSecClassKey,
+                    (__bridge id)kSecAttrApplicationTag: tagData,
+                    (__bridge id)kSecAttrAccessGroup: DORHSupporterDeviceKeyAccessGroup
+                };
+                SecItemDelete((__bridge CFDictionaryRef)oldGroupQuery);
+                NSDictionary *fallbackDelete = @{
+                    (__bridge id)kSecClass: (__bridge id)kSecClassKey,
+                    (__bridge id)kSecAttrApplicationTag: tagData
+                };
+                SecItemDelete((__bridge CFDictionaryRef)fallbackDelete);
+            } @catch (NSException *e) {}
+            if (existingItem)
+                CFRelease(existingItem);
+            // fall through to creation as if not found
+        } else {
+            if (existingItem)
+                CFRelease(existingItem);
 
-        if (failureStage)
-            *failureStage = @"lookup";
+            if (failureStage)
+                *failureStage = @"lookup";
 
-        if (failureCode)
-            *failureCode = (NSInteger)lookupStatus;
+            if (failureCode)
+                *failureCode = (NSInteger)lookupStatus;
 
-        return NULL;
+            return NULL;
+        }
     }
 
     CFErrorRef accessError = NULL;
