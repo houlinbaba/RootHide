@@ -614,6 +614,32 @@ DORHSupporterCopyOrCreateDevicePrivateKey(BOOL *created,
                 ? (NSInteger)CFErrorGetCode(createError)
                 : -1;
 
+        // TrollStore/无 SecureEnclave 权限时 -34018，尝试回退到软件钥匙（无 SecureEnclave）以保证 RHP1 可用
+        if (code == -34018) {
+            if (createError) CFRelease(createError);
+            createError = NULL;
+            // 重新创建 accessControl（已被 release，需重建）
+            SecAccessControlRef fallbackAC = SecAccessControlCreateWithFlags(kCFAllocatorDefault, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, 0, NULL);
+            NSDictionary *fallbackPrivate = @{
+                (__bridge id)kSecAttrIsPermanent: @YES,
+                (__bridge id)kSecAttrApplicationTag: tagData,
+                (__bridge id)kSecAttrAccessControl: (__bridge id)fallbackAC
+            };
+            if (fallbackAC) CFRelease(fallbackAC);
+            NSDictionary *fallbackAttrs = @{
+                (__bridge id)kSecAttrKeyType: (__bridge id)kSecAttrKeyTypeECSECPrimeRandom,
+                (__bridge id)kSecAttrKeySizeInBits: @256,
+                (__bridge id)kSecPrivateKeyAttrs: fallbackPrivate
+            };
+            privateKey = SecKeyCreateRandomKey((__bridge CFDictionaryRef)fallbackAttrs, &createError);
+            if (privateKey) {
+                if (createError) CFRelease(createError);
+                if (created) *created = YES;
+                return privateKey;
+            }
+            code = createError ? (NSInteger)CFErrorGetCode(createError) : -1;
+        }
+
         if (createError)
             CFRelease(createError);
 
