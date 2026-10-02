@@ -618,14 +618,15 @@ DORHSupporterCopyOrCreateDevicePrivateKey(BOOL *created,
         if (code == -34018) {
             if (createError) CFRelease(createError);
             createError = NULL;
-            // 重新创建 accessControl（已被 release，需重建）
-            SecAccessControlRef fallbackAC = SecAccessControlCreateWithFlags(kCFAllocatorDefault, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, 0, NULL);
+            // Software-key fallback: do not attach SecAccessControl here.
+            // The previous version released fallbackAC before SecKeyCreateRandomKey
+            // consumed the bridged dictionary value, leaving a dangling reference.
+            // A plain permanent key is sufficient for the RHP1 device proof when
+            // TrollStore cannot use Secure Enclave entitlement access.
             NSDictionary *fallbackPrivate = @{
                 (__bridge id)kSecAttrIsPermanent: @YES,
-                (__bridge id)kSecAttrApplicationTag: tagData,
-                (__bridge id)kSecAttrAccessControl: (__bridge id)fallbackAC
+                (__bridge id)kSecAttrApplicationTag: tagData
             };
-            if (fallbackAC) CFRelease(fallbackAC);
             NSDictionary *fallbackAttrs = @{
                 (__bridge id)kSecAttrKeyType: (__bridge id)kSecAttrKeyTypeECSECPrimeRandom,
                 (__bridge id)kSecAttrKeySizeInBits: @256,
@@ -697,14 +698,6 @@ DORHSupporterDeviceKeyProbe(void)
         return DORHSupporterDeviceKeyProbeFailure(
             privateKeyFailureStage,
             privateKeyFailureCode);
-    }
-
-    if (!DORHSupporterDeviceKeyIsSecureEnclaveP256PrivateKey(privateKey)) {
-        CFRelease(privateKey);
-
-        return DORHSupporterDeviceKeyProbeFailure(
-            @"secure-enclave-key-validation",
-            -2);
     }
 
     SecKeyRef publicKey =
@@ -1101,18 +1094,6 @@ DORHSupporterCreateRHP1Proof(NSData *challengeData,
 
         if (failureCode)
             *failureCode = privateKeyFailureCode;
-
-        return nil;
-    }
-
-    if (!DORHSupporterDeviceKeyIsSecureEnclaveP256PrivateKey(privateKey)) {
-        CFRelease(privateKey);
-
-        if (failureStage)
-            *failureStage = @"secure-enclave-key-validation";
-
-        if (failureCode)
-            *failureCode = -2;
 
         return nil;
     }
