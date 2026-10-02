@@ -639,6 +639,26 @@ DORHSupporterCopyOrCreateDevicePrivateKey(BOOL *created,
                 return privateKey;
             }
             code = createError ? (NSInteger)CFErrorGetCode(createError) : -1;
+            // 极端 TrollStore：永久钥匙一律 -34018（缺 keychain-access-groups）。再回退到内存临时钥匙，完全不写 Keychain。
+            if (code == -34018) {
+                if (createError) CFRelease(createError);
+                createError = NULL;
+                NSDictionary *ephemeralPrivate = @{
+                    (__bridge id)kSecAttrIsPermanent: @NO
+                };
+                NSDictionary *ephemeralAttrs = @{
+                    (__bridge id)kSecAttrKeyType: (__bridge id)kSecAttrKeyTypeECSECPrimeRandom,
+                    (__bridge id)kSecAttrKeySizeInBits: @256,
+                    (__bridge id)kSecPrivateKeyAttrs: ephemeralPrivate
+                };
+                privateKey = SecKeyCreateRandomKey((__bridge CFDictionaryRef)ephemeralAttrs, &createError);
+                if (privateKey) {
+                    if (createError) CFRelease(createError);
+                    if (created) *created = YES;
+                    return privateKey;
+                }
+                code = createError ? (NSInteger)CFErrorGetCode(createError) : -1;
+            }
         }
 
         if (createError)
