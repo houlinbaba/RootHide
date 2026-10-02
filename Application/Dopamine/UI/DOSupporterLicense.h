@@ -1737,22 +1737,43 @@ static inline void DORHSupporterRemoveLicense(void)
     // Deliberately keep the stable DeviceCode. Removing entitlement should not
     // turn the same physical device into a new licensing identity.
     //
-    DORHSupporterSetPersistentString(
+    BOOL ok = DORHSupporterSetPersistentString(
         DORHSupporterPersistentLicenseCodeKey,
         nil);
 
-    // Fallback: ensure empty state file is physically removed to avoid stale reads after reboot (NSUserDefaults synchronize is unreliable on TrollStore).
+    // Robust: if write failed or license still readable, force-delete file to avoid reboot bypass
     @try {
-        NSDictionary *remaining = DORHSupporterReadPersistentState();
-        if (remaining.count == 0) {
-            [[NSFileManager defaultManager] removeItemAtPath:DORHSupporterPersistentStatePath() error:nil];
+        NSString *still = DORHSupporterPersistentString(DORHSupporterPersistentLicenseCodeKey);
+        if (still.length != 0 || !ok) {
+            NSMutableDictionary *state = [DORHSupporterReadPersistentState() mutableCopy] ?: [NSMutableDictionary dictionary];
+            [state removeObjectForKey:DORHSupporterPersistentLicenseCodeKey];
+            if (state.count == 0) {
+                [[NSFileManager defaultManager] removeItemAtPath:DORHSupporterPersistentStatePath() error:nil];
+            } else {
+                DORHSupporterWritePersistentState(state);
+                if (DORHSupporterPersistentString(DORHSupporterPersistentLicenseCodeKey).length != 0) {
+                    [[NSFileManager defaultManager] removeItemAtPath:DORHSupporterPersistentStatePath() error:nil];
+                }
+            }
+        } else {
+            NSDictionary *remaining = DORHSupporterReadPersistentState();
+            if (remaining.count == 0) {
+                [[NSFileManager defaultManager] removeItemAtPath:DORHSupporterPersistentStatePath() error:nil];
+            }
         }
-    } @catch (NSException *e) {}
+    } @catch (NSException *e) {
+        @try { [[NSFileManager defaultManager] removeItemAtPath:DORHSupporterPersistentStatePath() error:nil]; } @catch (NSException *e2) {}
+    }
 
     [NSUserDefaults.standardUserDefaults
         removeObjectForKey:DORHSupporterLicenseDefaultsKey];
 
     [NSUserDefaults.standardUserDefaults synchronize];
+    // double-clear for TrollStore
+    if ([NSUserDefaults.standardUserDefaults stringForKey:DORHSupporterLicenseDefaultsKey].length != 0) {
+        [NSUserDefaults.standardUserDefaults removeObjectForKey:DORHSupporterLicenseDefaultsKey];
+        [NSUserDefaults.standardUserDefaults synchronize];
+    }
 
     [[NSNotificationCenter defaultCenter]
         postNotificationName:
