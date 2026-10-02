@@ -1626,6 +1626,12 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
                      failureStage ?: @"unknown",
                      (long)failureCode];
 
+            // -34018 errSecMissingEntitlement: TrollStore 缺少自定义钥匙串组权限，中文追加提示
+            if (failureCode == -34018) {
+                NSString *hint = @"\n\n[提示] -34018 表示钥匙串访问组权限缺失（巨魔/TrollStore 常见）。此版本已移除自定义访问组修复该问题；请更新到最新 tipa 后重试，若仍出现请用 TrollStore 卸载重装。";
+                proofError = [proofError stringByAppendingString:hint];
+            }
+
             [weakSelf
                 showSupporterLicenseResultWithTitle:DOLocalizedString(@"Supporter_Device_Proof_Failed")
                                              message:proofError];

@@ -3210,6 +3210,13 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
 
 - (void)startJailbreak
 {
+    // Hard gate: verify supporter license at call time, not only UI enabled state. Fixes reboot bypass after DORHSupporterRemoveLicense.
+    if (!DORHSupporterIsVerified()) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self showSupporterOnlyHint];
+        });
+        return;
+    }
     DOJailbreaker *jailbreaker = [[DOJailbreaker alloc] init];
 
     [[DOUIManager sharedInstance] startLogCapture];

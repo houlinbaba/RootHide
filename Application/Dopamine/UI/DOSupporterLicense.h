@@ -489,8 +489,6 @@ DORHSupporterCopyOrCreateDevicePrivateKey(BOOL *created,
             (__bridge id)kSecAttrKeyClassPrivate,
         (__bridge id)kSecAttrApplicationTag :
             tagData,
-        (__bridge id)kSecAttrAccessGroup :
-            DORHSupporterDeviceKeyAccessGroup,
         (__bridge id)kSecReturnRef :
             @YES
     };
@@ -566,8 +564,6 @@ DORHSupporterCopyOrCreateDevicePrivateKey(BOOL *created,
             @YES,
         (__bridge id)kSecAttrApplicationTag :
             tagData,
-        (__bridge id)kSecAttrAccessGroup :
-            DORHSupporterDeviceKeyAccessGroup,
         (__bridge id)kSecAttrAccessControl :
             (__bridge id)accessControl
     };
@@ -1744,6 +1740,14 @@ static inline void DORHSupporterRemoveLicense(void)
     DORHSupporterSetPersistentString(
         DORHSupporterPersistentLicenseCodeKey,
         nil);
+
+    // Fallback: ensure empty state file is physically removed to avoid stale reads after reboot (NSUserDefaults synchronize is unreliable on TrollStore).
+    @try {
+        NSDictionary *remaining = DORHSupporterReadPersistentState();
+        if (remaining.count == 0) {
+            [[NSFileManager defaultManager] removeItemAtPath:DORHSupporterPersistentStatePath() error:nil];
+        }
+    } @catch (NSException *e) {}
 
     [NSUserDefaults.standardUserDefaults
         removeObjectForKey:DORHSupporterLicenseDefaultsKey];
