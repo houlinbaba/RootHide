@@ -1940,6 +1940,13 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
     dismissTap.cancelsTouchesInView = NO;
     [self.view addGestureRecognizer:dismissTap];
     self.supporterOnlyDismissTapGesture = dismissTap;
+
+    // Auto-dismiss after 4 seconds; manual tap-to-dismiss remains available.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(4.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (self.supporterOnlyHintView == hint) {
+            [self dismissSupporterOnlyHint];
+        }
+    });
 }
 
 - (void)presentCustomGlassAvatarPicker
