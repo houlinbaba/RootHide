@@ -154,7 +154,7 @@ DORHSupporterHardwareIdentityProbe(void)
 // Fixed logical key tag. This tag must not change with App versions.
 //
 static NSString * const DORHSupporterDeviceKeyTag =
-    @"com.dopaminerh.supporter.devicekey.v1";
+    @"com.dopaminerh.supporter.devicekey.v2";
 
 static NSString * const DORHSupporterDeviceKeyAccessGroup =
     @"com.dopaminerh.supporter.devicekey";
