@@ -1832,6 +1832,29 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
     [self applyCustomGlassHomeAppearance];
 }
 
+- (void)applySupporterLockAppearanceToJailbreakButton
+{
+    if (!self.jailbreakBtn)
+        return;
+
+    BOOL verified = DORHSupporterIsVerified();
+    BOOL buttonActive = self.jailbreakBtn.enabled;
+    CGFloat contentAlpha = (verified && buttonActive) ? 1.0 : 0.70;
+
+    self.jailbreakBtn.alpha = 1.0;
+    if (![self.jailbreakBtn respondsToSelector:@selector(button)])
+        return;
+    self.jailbreakBtn.button.alpha = contentAlpha;
+
+    if (!verified && buttonActive) {
+        // Unlicensed: adaptive gray title so the lock is visible at a glance.
+        // The button stays tappable; tapping it explains the lock via hint.
+        BOOL darkForeground = [self.navigationController customGlassPrefersDarkForegroundForView:self.jailbreakBtn];
+        UIColor *lockedTitleColor = [UIColor colorWithWhite:(darkForeground ? 0.08 : 1.0) alpha:0.42];
+        [self.jailbreakBtn.button setTitleColor:lockedTitleColor forState:UIControlStateNormal];
+    }
+}
+
 - (void)refreshSupporterState
 {
     BOOL verified = DORHSupporterIsVerified();
@@ -1846,12 +1869,10 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
     if (self.jailbreakBtn) {
         BOOL isJailbroken = [[DOEnvironmentManager sharedManager] isJailbroken] || [[DOEnvironmentManager sharedManager] isJailbrokenWithOtherJailbreak];
         BOOL isSupported = [[DOEnvironmentManager sharedManager] isSupported];
-        self.jailbreakBtn.enabled = !isJailbroken && isSupported && verified;
-        CGFloat jailbreakContentAlpha = self.jailbreakBtn.enabled ? 1.0 : 0.70;
-        self.jailbreakBtn.alpha = 1.0;
-        if ([self.jailbreakBtn respondsToSelector:@selector(button)]) {
-            self.jailbreakBtn.button.alpha = jailbreakContentAlpha;
-        }
+        // Option A: keep the button tappable while unlicensed; the tap shows
+        // the supporter-only hint instead of silently doing nothing.
+        self.jailbreakBtn.enabled = !isJailbroken && isSupported;
+        [self applySupporterLockAppearanceToJailbreakButton];
     }
 }
 
@@ -2224,7 +2245,8 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
         [self startJailbreak];
         
     }]];
-    self.jailbreakBtn.enabled = !isJailbroken && isSupported && DORHSupporterIsVerified();
+    self.jailbreakBtn.enabled = !isJailbroken && isSupported;
+    [self applySupporterLockAppearanceToJailbreakButton];
 
     [self.view addSubview:self.jailbreakBtn];
 
@@ -3117,13 +3139,13 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
 
         [self startJailbreak];
     }]];
-    self.jailbreakBtn.enabled = !isJailbroken && isSupported && DORHSupporterIsVerified();
+    self.jailbreakBtn.enabled = !isJailbroken && isSupported;
 
     // DOJailbreakButton dims its entire view when disabled. Keep the V2.2
-    // material itself at full strength and dim only the button content.
-    CGFloat jailbreakContentAlpha = self.jailbreakBtn.enabled ? 1.0 : 0.70;
-    self.jailbreakBtn.alpha = 1.0;
-    self.jailbreakBtn.button.alpha = jailbreakContentAlpha;
+    // material itself at full strength and dim only the button content;
+    // the same treatment (plus the unlicensed gray title) is applied by
+    // applySupporterLockAppearanceToJailbreakButton.
+    [self applySupporterLockAppearanceToJailbreakButton];
 
     // Glass V2.2 compact CTA uses the exact Main Glass material. When the
     // jailbreak flow expands, the handler above hides this surface and restores
@@ -3193,8 +3215,8 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
     [super viewWillAppear:animated];
     if (DORHSupporterIsVerified()) {
         [self applyCustomGlassHomeAppearance];
-        [self refreshSupporterState];
     }
+    [self refreshSupporterState];
     [self.jailbreakBtn.button setTitle:[self jailbreakButtonTitle] forState:UIControlStateNormal];
 }
 
