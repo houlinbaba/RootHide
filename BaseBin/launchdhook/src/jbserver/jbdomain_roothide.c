@@ -1,5 +1,6 @@
 #include <signal.h>
 #include "jbserver_global.h"
+#include "jbdomain_roothide.h"
 
 #include <libjailbreak/libjailbreak.h>
 #include <libjailbreak/roothider.h>
@@ -122,7 +123,13 @@ static int trust_macho_recurse(const char *machoPath, const char *dlopenCallerIm
 	return result;
 }
 
-int roothide_trust_executable_recurse(audit_token_t *callerToken, const char *executablePath, const char *processWorkingDir, xpc_object_t preferredArchsArray)
+int roothide_trust_executable_for_launchd(const char *executablePath)
+{
+	if (!roothide_path_argument_valid(executablePath, true, true)) return -1;
+	return trust_macho_recurse(executablePath, NULL, executablePath, "/", NULL);
+}
+
+static int roothide_trust_executable_recurse(audit_token_t *callerToken, const char *executablePath, const char *processWorkingDir, xpc_object_t preferredArchsArray)
 {
 	if (!roothide_privileged_action_allowed(callerToken, "trust executable")) return -1;
 	if (!roothide_path_argument_valid(executablePath, true, false) ||

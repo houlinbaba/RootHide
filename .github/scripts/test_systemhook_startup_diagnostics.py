@@ -145,11 +145,14 @@ int main(int argc, char **argv) {
 LOAD_HARNESS = r'''
 #include <assert.h>
 #include <stdbool.h>
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 static const char *test_patch_path;
 static bool fail_load;
+static int patch_stat_error;
 static int load_calls, diagnostic_calls;
 static char diagnostic[1024];
 static bool isRemovableBundlePath(const char *path) { (void)path; return false; }
@@ -166,6 +169,12 @@ static void *test_dlopen(const char *path, int flags) {
     return fail_load ? NULL : (void *)0x1234;
 }
 static const char *test_dlerror(void) { return "injected missing dependency"; }
+static int test_lstat(const char *path, struct stat *info) {
+    assert(path);
+    memset(info, 0, sizeof(*info));
+    if (patch_stat_error) { errno = patch_stat_error; return -1; }
+    return 0;
+}
 static void test_diagnostic(const char *format, ...) {
     ++diagnostic_calls;
     va_list args;
@@ -178,6 +187,7 @@ static void test_diagnostic(const char *format, ...) {
 #define RTLD_NOW 2
 #define dlopen test_dlopen
 #define dlerror test_dlerror
+#define lstat test_lstat
 #define ROOTHIDE_RUNTIME_DIAGNOSTIC(...) test_diagnostic(__VA_ARGS__)
 /* The old production error path fails this negative control at runtime. */
 #define SYSLOG(...) assert(!"startup error reached a service logger")
@@ -186,6 +196,20 @@ static void test_diagnostic(const char *format, ...) {
 LOAD_CASES = r'''
 int main(void) {
     test_patch_path = "/var/jb/usr/lib/roothidepatch.dylib";
+    patch_stat_error = ENOENT;
+    errno = EDOM;
+    assert(roothide_init_with_executable("/usr/libexec/xpcproxy"));
+    assert(errno == EDOM);
+    assert(load_calls == 0 && diagnostic_calls == 0); // Current bootstrap omits this optional supplement.
+    patch_stat_error = EACCES;
+    assert(!roothide_init_with_executable("/usr/libexec/xpcproxy"));
+    assert(load_calls == 0 && diagnostic_calls == 1 && strstr(diagnostic, "inspection failed"));
+    diagnostic_calls = 0;
+    patch_stat_error = ENOTDIR;
+    assert(!roothide_init_with_executable("/usr/libexec/xpcproxy"));
+    assert(load_calls == 0 && diagnostic_calls == 1);
+    diagnostic_calls = 0;
+    patch_stat_error = 0;
     fail_load = true;
     assert(!roothide_init_with_executable("/usr/libexec/xpcproxy"));
     assert(load_calls == 1 && diagnostic_calls == 1);
@@ -211,7 +235,7 @@ int main(void) {
     fail_load = false;
     assert(load_required_runtime_dylib("forkfix", "/basebin/forkfix.dylib"));
     assert(diagnostic_calls == 0);
-    puts("PASS: extracted startup load failures return without service logging");
+    puts("PASS: absent optional patch skips loading/logging; present or inaccessible failures return without service logging");
     return 0;
 }
 '''

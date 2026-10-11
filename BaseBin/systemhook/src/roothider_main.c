@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <libgen.h>
 #include <sys/sysctl.h>
+#include <sys/stat.h>
 #include <sys/proc_info.h>
 
 #include <litehook.h>
@@ -633,6 +634,20 @@ bool roothide_init_with_executable(const char* executable)
 	const char *patchPath = JBROOT_PATH("/usr/lib/roothidepatch.dylib");
 	if (!patchPath) {
 		ROOTHIDE_RUNTIME_DIAGNOSTIC("RootHide process patch path resolution failed");
+		return false;
+	}
+	// The bundled RootHide bootstrap ships roothideinit/libroothide without
+	// this optional supplement. Its absence must not stop core initialization
+	// or turn every process launch into a failed dlopen / log entry.
+	struct stat patchInfo;
+	int savedErrno = errno;
+	if (lstat(patchPath, &patchInfo) != 0) {
+		int pathError = errno;
+		if (pathError == ENOENT) {
+			errno = savedErrno;
+			return true;
+		}
+		ROOTHIDE_RUNTIME_DIAGNOSTIC("RootHide process patch inspection failed: path=%s errno=%d", patchPath, pathError);
 		return false;
 	}
 	if (!dlopen(patchPath, RTLD_NOW)) { // requires JIT

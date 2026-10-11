@@ -15,6 +15,7 @@ extern int jbdSpawnPatchChildDeferred(int pid, bool resume);
 
 #include "../systemhook/src/common.h"
 #include "../systemhook/src/common/envbuf.h"
+#include "jbserver/jbdomain_roothide.h"
 
 const char* HOOK_DYLIB_PATH = NULL;
 
@@ -228,13 +229,12 @@ void fix__iosConnect()
     }
 }
 
-int roothide_trust_executable_recurse(const char *executablePath, const char *processWorkingDir, xpc_object_t preferredArchsArray);
 int roothide_launchd_trust_executable(const char* path)
 {
 	// dyld patching does not make dependencies trusted before dyld maps them.
-	// Recursing here is required for rootless tools such as apt-get, whose
+	// Recursing here is required for bootstrap tools such as apt-get, whose
 	// private libraries are loaded before systemhook can handle a dlopen.
-	return roothide_trust_executable_recurse(path, "/", NULL);
+	return roothide_trust_executable_for_launchd(path);
 }
 
 int roothide_launchd___posix_spawn_posthook(pid_t *restrict pidp, const char *restrict path, struct _posix_spawn_args_desc *desc, char *const argv[restrict], char *const envp[restrict])

@@ -162,8 +162,14 @@ static NSString *DORootHideDiagnosticReport(NSString *header, NSArray<NSString *
     NSMutableString *report = [NSMutableString stringWithFormat:@"RootHide diagnostics\n%@\nExported: %@\nOnly RootHide stage/startup logs and recent Sileo/RootHide crashes are collected.\nMissing/unreadable files are not proof of success.\n", header, now];
     for (NSString *path in logs) DOAppendDiagnosticFile(report, path, 256 * 1024, YES);
     [report appendString:@"\n\n--- Read-only loader paths (no service health probe) ---"];
+    [report appendString:@"\nThe plain systemhook name can be absent after launchd renames it; roothidepatch is an optional bootstrap supplement."];
     if (root.length) {
         DOAppendDiagnosticPath(report, root);
+        NSString *rootName = root.lastPathComponent;
+        if ([rootName hasPrefix:@".jbroot-"] && rootName.length == 24) {
+            NSString *hookName = [NSString stringWithFormat:@"basebin/systemhook-%@.dylib", [rootName substringFromIndex:8]];
+            DOAppendDiagnosticPath(report, [root stringByAppendingPathComponent:hookName]);
+        }
         for (NSString *relative in @[@"basebin/.version", @"basebin/systemhook.dylib", @"basebin/roothidehooks.dylib",
                                      @"usr/lib/roothideinit.dylib", @"usr/lib/roothidepatch.dylib", @"usr/lib/libroothide.dylib",
                                      @"usr/lib/liblzma.5.dylib", @"usr/lib/libzstd.1.dylib"]) {
