@@ -35,6 +35,7 @@ PREFIX = r'''
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/types.h>
 typedef struct { int pid; } audit_token_t;
 typedef void *xpc_object_t;
 static int audit_token_to_pid(audit_token_t token) { return token.pid; }
