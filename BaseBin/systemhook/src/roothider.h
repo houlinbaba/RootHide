@@ -22,9 +22,9 @@ void abort_with_reason(uint32_t reason_namespace, uint64_t reason_code, const ch
 
 #include <stdlib.h>
 #include <os/log.h>
-#include <sys/syslog.h>
-#define SYSLOG(...) do {openlog("systemhook",LOG_PID,LOG_AUTH);syslog(LOG_DEBUG, __VA_ARGS__);closelog();} while(0)
-#define PROCLOG(progname, ...) do { const char* name=getprogname(); if(name && strcmp(name, progname)==0) {SYSLOG(__VA_ARGS__);} } while(0)
+#include "common/runtime_diagnostics.h"
+#define ROOTHIDE_RUNTIME_DIAGNOSTIC(...) roothide_runtime_diagnostic(__VA_ARGS__)
+#define PROCLOG(progname, ...) do { const char* name=getprogname(); if(name && strcmp(name, progname)==0) {ROOTHIDE_RUNTIME_DIAGNOSTIC(__VA_ARGS__);} } while(0)
 #define PROCASSERT(progname, e) do { const char* name=getprogname(); if(name && strcmp(name, progname)==0) {ASSERT(e);} } while(0)
 
 pid_t __getppid();

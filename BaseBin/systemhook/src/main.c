@@ -85,15 +85,13 @@ static int trust_executable_recurse_no_arch(const char *path)
 static bool load_required_runtime_dylib(const char *component, const char *path)
 {
 	if (!path) {
-		fprintf(stderr, "[RootHide] required runtime load failed: component=%s path=<null> error=path resolution failed\n", component);
-		SYSLOG("RootHide required runtime load failed: component=%s path=<null> error=path resolution failed", component);
+		ROOTHIDE_RUNTIME_DIAGNOSTIC("RootHide required runtime load failed: component=%s path=<null> error=path resolution failed", component);
 		return false;
 	}
 
 	if (!dlopen(path, RTLD_NOW)) {
 		const char *error = dlerror();
-		fprintf(stderr, "[RootHide] required runtime load failed: component=%s path=%s error=%s\n", component, path, error ? error : "<unknown>");
-		SYSLOG("RootHide required runtime load failed: component=%s path=%s error=%s", component, path, error ? error : "<unknown>");
+		ROOTHIDE_RUNTIME_DIAGNOSTIC("RootHide required runtime load failed: component=%s path=%s error=%s", component, path, error ? error : "<unknown>");
 		return false;
 	}
 

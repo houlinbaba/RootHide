@@ -41,7 +41,7 @@ static const char *test_dlerror(void) { return "unexpected"; }
 static void test_syslog(const char *format, ...) { (void)format; }
 #define RTLD_NOW 2
 #define JBROOT_PATH(path) (test_path)
-#define SYSLOG(...) test_syslog(__VA_ARGS__)
+#define ROOTHIDE_RUNTIME_DIAGNOSTIC(...) test_syslog(__VA_ARGS__)
 #define dlopen test_dlopen
 #define dlsym test_dlsym
 #define dlclose test_dlclose
@@ -81,7 +81,7 @@ static const char *test_dlerror(void) { return "injected failure"; }
 static void test_syslog(const char *format, ...) { (void)format; }
 #define RTLD_NOW 2
 #define JBROOT_PATH(path) (test_path)
-#define SYSLOG(...) test_syslog(__VA_ARGS__)
+#define ROOTHIDE_RUNTIME_DIAGNOSTIC(...) test_syslog(__VA_ARGS__)
 #define dlopen test_dlopen
 #define dlsym test_dlsym
 #define dlclose test_dlclose

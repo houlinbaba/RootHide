@@ -169,6 +169,9 @@ jobs:
       - name: RootHide path hook retry regressions
         run: python3 .github/scripts/test_pathhook_runtime.py
 
+      - name: Systemhook startup diagnostics regressions
+        run: python3 .github/scripts/test_systemhook_startup_diagnostics.py
+
       - name: RootHide jbserver malformed XPC regressions
         run: python3 .github/scripts/test_jbserver_runtime.py
 
