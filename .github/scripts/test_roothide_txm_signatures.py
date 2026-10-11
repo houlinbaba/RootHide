@@ -354,9 +354,11 @@ def main():
         subprocess.run(['xcrun', 'clang', '-fblocks', '-Wno-deprecated-declarations',
                         '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
                         '-I', str(SOURCE), str(source), str(SOURCE / 'signature_policy.c'),
-                        '-o', str(binary)], check=True)
+                        '-lobjc', '-o', str(binary)], check=True)
+        # Apple's macOS ASan runtime does not support LeakSanitizer. The
+        # harness still checks stream cleanup and retains ASan/UBSan checks.
         subprocess.run([str(binary)], check=True, timeout=20,
-                       env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=1', 'UBSAN_OPTIONS': 'halt_on_error=1'})
+                       env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0', 'UBSAN_OPTIONS': 'halt_on_error=1'})
 
 
 if __name__ == '__main__':
