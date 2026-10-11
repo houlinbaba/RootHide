@@ -4,6 +4,7 @@
 #include <mach-o/dyld.h>
 #include "../trustcache.h"
 #include "../signatures.h"
+#include "../info.h"
 #include "../roothider.h"
 #include "../jbroot.h"
 
