@@ -770,6 +770,8 @@ int exec_cmd_roothide_spawn(pid_t* pidp, const char* path, const posix_spawn_fil
     int ret = posix_spawn(pidp, path, fap, attrp, argv, envp);
     pid_t pid = (ret == 0) ? *pidp : 0;
     roothide_stage_log("posix_spawn.end result=%d pid=%d", ret, pid);
+    /* The caller may reuse the supplied spawn attributes. */
+    posix_spawnattr_setflags(attrp, flags);
 
     JBLogDebug("spawn ret=%d pid=%d", ret, pid);
 
@@ -777,14 +779,22 @@ int exec_cmd_roothide_spawn(pid_t* pidp, const char* path, const posix_spawn_fil
     {
         if(need_patch_child) {
             // will fail before launchdhook injected and dyld patched, eg: opainject...
-            roothide_stage_log("spawn.patch.begin pid=%d resume=%d", pid, should_resume);
+            /* Keep the original process identity across the potentially slow RPC. */
+            int originalPidVersion = proc_get_pidversion(pid);
+            roothide_stage_log("spawn.patch.begin pid=%d resume=%d version=%d", pid, should_resume, originalPidVersion);
             int patchResult = jbdSpawnPatchChild(pid, should_resume);
             roothide_stage_log("spawn.patch.end pid=%d result=%d", pid, patchResult);
             if(patchResult != 0) {
                 JBLogError("Failed to patch spawned process (%d) %s", pid, path);
-                //jailbreak internal spawn, just let it hang forever so that we could get a panic log
-                //kill(pid, SIGQUIT); //core dump
-                //kill(pid, SIGKILL);
+                /* Best-effort cleanup of the intentionally suspended child.
+                 * PID version checks reduce (but do not eliminate) PID reuse races. */
+                int currentPidVersion = proc_get_pidversion(pid);
+                if (originalPidVersion > 0 && currentPidVersion == originalPidVersion) {
+                    int killResult = kill(pid, SIGKILL);
+                    roothide_stage_log("spawn.patch.cleanup pid=%d result=%d errno=%d", pid, killResult, killResult ? errno : 0);
+                } else {
+                    roothide_stage_log("spawn.patch.cleanup.identity_changed pid=%d before=%d after=%d", pid, originalPidVersion, currentPidVersion);
+                }
                 if(attr) {
                     posix_spawnattr_destroy(&attr);
                     attrp = NULL;
