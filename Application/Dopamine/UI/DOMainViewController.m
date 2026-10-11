@@ -1806,6 +1806,13 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
 
 @implementation DOMainViewController
 
+- (void)shareRootHideLogFromLongPress:(UILongPressGestureRecognizer *)gesture
+{
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        [[DOUIManager sharedInstance] shareRootHideStageLogFromView:gesture.view];
+    }
+}
+
 - (void)applyCustomGlassHomeAppearance
 {
     // The navigation controller owns wallpaper source + blur. Home only updates
@@ -2128,6 +2135,9 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
     DOActionMenuView *actionView = [[DOActionMenuView alloc] initWithActions:@[
         [UIAction actionWithTitle:DOLocalizedString(@"Menu_Settings_Title") image:[UIImage systemImageNamed:@"gearshape" withConfiguration:[DOGlobalAppearance smallIconImageConfiguration]] identifier:@"settings" handler:^(__kindof UIAction * _Nonnull action) {
             [self.navigationController pushViewController:[[DOSettingsController alloc] init] animated:YES];
+        }],
+        [UIAction actionWithTitle:DOLocalizedString(@"Menu_Share_RootHide_Log") image:[UIImage systemImageNamed:@"square.and.arrow.up" withConfiguration:[DOGlobalAppearance smallIconImageConfiguration]] identifier:@"roothide-diagnostics" handler:^(__kindof UIAction * _Nonnull action) {
+            [[DOUIManager sharedInstance] shareRootHideStageLogFromView:self.view];
         }],
         [UIAction actionWithTitle:DOLocalizedString(@"Menu_Restart_SpringBoard_Title") image:[UIImage systemImageNamed:@"arrow.clockwise" withConfiguration:[DOGlobalAppearance smallIconImageConfiguration]] identifier:@"respring" handler:^(__kindof UIAction * _Nonnull action) {
             [self fadeToBlack:^{
@@ -2971,6 +2981,9 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
     }];
 
     DOCustomLiquidGlassView *settingsCard = [self customGlassCardWithTitle:DOLocalizedString(@"Menu_Settings_Title") imageName:@"gearshape" action:settingsAction];
+    UILongPressGestureRecognizer *diagnosticPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(shareRootHideLogFromLongPress:)];
+    diagnosticPress.cancelsTouchesInView = YES;
+    [settingsCard addGestureRecognizer:diagnosticPress];
     DOCustomLiquidGlassView *creditsCard = [self customGlassCardWithTitle:DOLocalizedString(@"Menu_Credits_Title") imageName:@"info.circle" action:creditsAction];
     [leftColumn addArrangedSubview:settingsCard];
     [leftColumn addArrangedSubview:creditsCard];

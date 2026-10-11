@@ -205,6 +205,9 @@ jobs:
       - name: RootHide diagnostic export regressions
         run: python3 .github/scripts/test_roothide_diagnostic_export.py
 
+      - name: Settings slow-service snapshot regressions
+        run: python3 .github/scripts/test_settings_runtime_snapshot.py
+
       - name: Focused build P0-touched targets
         if: env.BUILD_MODE == 'focused'
         run: |

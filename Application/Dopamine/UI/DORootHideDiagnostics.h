@@ -78,16 +78,33 @@ static void DOAppendDiagnosticFile(NSMutableString *report, NSString *path, NSUI
 static NSString *DODiagnosticCrashProcess(NSString *name)
 {
     NSString *lower = name.lowercaseString;
-    if (![lower.pathExtension isEqualToString:@"ips"]) return nil;
+    if (![lower.pathExtension isEqualToString:@"ips"] &&
+        ![lower.pathExtension isEqualToString:@"crash"] &&
+        ![lower hasSuffix:@".ips.ca.synced"] && ![lower hasSuffix:@".ips.synced"]) return nil;
     for (NSString *process in @[@"sileo", @"roothide"]) {
         if ([lower hasPrefix:[process stringByAppendingString:@"-"]]) return process;
     }
     return nil;
 }
 
+static NSArray<NSString *> *DODiagnosticCrashDirectories(NSArray<NSString *> *directories, NSString *root)
+{
+    NSMutableOrderedSet<NSString *> *paths = [NSMutableOrderedSet orderedSetWithArray:directories];
+    // RootHide can redirect a jailbreak App's home/log paths into its bootstrap.
+    // Keep both locations; these inspections do not query a jailbreak service.
+    if (root.length) {
+        for (NSString *relative in @[@"var/mobile/Library/Logs/CrashReporter",
+                                     @"var/mobile/Library/Logs/CrashReporter/Retired"]) {
+            [paths addObject:[root stringByAppendingPathComponent:relative]];
+        }
+    }
+    return paths.array;
+}
+
 static void DOAppendDiagnosticCrashes(NSMutableString *report, NSArray<NSString *> *directories, NSDate *now)
 {
     NSMutableDictionary<NSString *, NSMutableArray<NSDictionary *> *> *newest = [NSMutableDictionary dictionary];
+    NSMutableSet<NSString *> *seenFiles = [NSMutableSet set];
     for (NSString *directory in directories) {
         DIR *dir = opendir(directory.fileSystemRepresentation);
         if (!dir) {
@@ -104,6 +121,10 @@ static void DOAppendDiagnosticCrashes(NSMutableString *report, NSArray<NSString 
             NSString *path = [directory stringByAppendingPathComponent:name];
             struct stat st;
             if (lstat(path.fileSystemRepresentation, &st) != 0 || !S_ISREG(st.st_mode)) continue;
+            // Alias directories must not let the same file occupy both slots.
+            NSString *identity = [NSString stringWithFormat:@"%llu:%llu", (unsigned long long)st.st_dev, (unsigned long long)st.st_ino];
+            if ([seenFiles containsObject:identity]) continue;
+            [seenFiles addObject:identity];
             // Include only the last week, with a small allowance for clock skew.
             NSTimeInterval age = now.timeIntervalSince1970 - (NSTimeInterval)st.st_mtime;
             if (age > 7 * 24 * 60 * 60 || age < -300) continue;
@@ -121,9 +142,9 @@ static void DOAppendDiagnosticCrashes(NSMutableString *report, NSArray<NSString 
     }
     for (NSString *process in @[@"sileo", @"roothide"]) {
         NSArray *items = newest[process];
-        if (!items.count) [report appendFormat:@"\nNo recent readable %@ .ips found. This does not establish whether the App crashed.", process];
+        if (!items.count) [report appendFormat:@"\nNo recent %@ crash file found. This does not establish whether the App crashed.", process];
         for (NSDictionary *item in items) {
-            // Keep each .ips complete or explicitly omit it; never silently cut crash JSON.
+            // Keep each crash file complete or explicitly omit it.
             DOAppendDiagnosticFile(report, item[@"path"], 1024 * 1024, NO);
         }
     }
@@ -161,6 +182,12 @@ static NSString *DORootHideDiagnosticReport(NSString *header, NSArray<NSString *
 {
     NSMutableString *report = [NSMutableString stringWithFormat:@"RootHide diagnostics\n%@\nExported: %@\nOnly RootHide stage/startup logs and recent Sileo/RootHide crashes are collected.\nMissing/unreadable files are not proof of success.\n", header, now];
     for (NSString *path in logs) DOAppendDiagnosticFile(report, path, 256 * 1024, YES);
+    if (root.length) {
+        for (NSString *name in @[@"Dopamine-app-startup-0.log", @"Dopamine-app-startup-501.log"]) {
+            NSString *relative = [@"var/mobile/Library/Logs/CrashReporter" stringByAppendingPathComponent:name];
+            DOAppendDiagnosticFile(report, [root stringByAppendingPathComponent:relative], 256 * 1024, YES);
+        }
+    }
     [report appendString:@"\n\n--- Read-only loader paths (no service health probe) ---"];
     [report appendString:@"\nThe plain systemhook name can be absent after launchd renames it; roothidepatch is an optional bootstrap supplement."];
     if (root.length) {
@@ -185,7 +212,7 @@ static NSString *DORootHideDiagnosticReport(NSString *header, NSArray<NSString *
         [report appendString:@"\nNo cached jailbreak root. Loader paths could not be inspected."];
     }
     [report appendString:@"\n\n--- Recent App crashes (up to two per App, last seven days) ---"];
-    DOAppendDiagnosticCrashes(report, crashDirectories, now);
+    DOAppendDiagnosticCrashes(report, DODiagnosticCrashDirectories(crashDirectories, root), now);
     return report.copy;
 }
 

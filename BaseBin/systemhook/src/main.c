@@ -391,8 +391,10 @@ int parse_dyldhook_jbinfo(char **jbRootPathOut, char **bootUUIDOut, char **sandb
 
 __attribute__((constructor)) static void initializer(void)
 {	
+	roothide_app_startup_diagnostic(getprogname(), "constructor.begin", 0);
 /***** roothide specific ****/
 	roothide_init();
+	roothide_app_startup_diagnostic(getprogname(), "root_binding.end", 0);
 /***** roothide specific ****/
 
 
@@ -407,9 +409,11 @@ __attribute__((constructor)) static void initializer(void)
 		else {
 			// If neither dyldhook nor systemhook managed to perform the check-in, something is very wrong and the best thing we can do is bail out
 			// Should realistically never happen though
+			roothide_app_startup_diagnostic(getprogname(), "process_checkin.failed", -1);
 			return;
 		}
 	}
+	roothide_app_startup_diagnostic(getprogname(), "process_checkin.end", 0);
 
 	// Unset DYLD_INSERT_LIBRARIES, but only if systemhook itself is the only thing contained in it
 	// Feeable attempt at making jailbreak detection harder
@@ -456,9 +460,12 @@ __attribute__((constructor)) static void initializer(void)
 
 /*************************** roothide *************************/
 /* after unsandboxing jbroot and applying library-trust-hook */
+roothide_app_startup_diagnostic(getprogname(), "runtime_init.begin", 0);
 if (!roothide_init_with_checkin(JB_RootPath)) { // will hook dlopen* if necessary
+	roothide_app_startup_diagnostic(getprogname(), "runtime_init.failed", -1);
 	return;
 }
+roothide_app_startup_diagnostic(getprogname(), "runtime_init.end", 0);
 /*************************** roothide ************************/
 
 
@@ -471,6 +478,7 @@ if (!roothide_init_with_checkin(JB_RootPath)) { // will hook dlopen* if necessar
 #endif
 
 	if (load_executable_path() == 0) {
+		roothide_app_startup_diagnostic(getprogname(), "executable_path.end", 0);
 		// Load RootHide process hooks / watchdog hook when necessary
 		if (!strcmp(gExecutablePath, "/usr/sbin/cfprefsd") ||
 			!strcmp(gExecutablePath, "/System/Library/CoreServices/SpringBoard.app/SpringBoard") ||
@@ -507,7 +515,12 @@ if (!roothide_init_with_checkin(JB_RootPath)) { // will hook dlopen* if necessar
 
 
 /******************* roothide *****************/
-if (!roothide_init_with_executable(gExecutablePath)) return;
+roothide_app_startup_diagnostic(getprogname(), "process_hooks.begin", 0);
+if (!roothide_init_with_executable(gExecutablePath)) {
+	roothide_app_startup_diagnostic(getprogname(), "process_hooks.failed", -1);
+	return;
+}
+roothide_app_startup_diagnostic(getprogname(), "process_hooks.end", 0);
 /******************* roothide ****************/
 
 
@@ -528,4 +541,5 @@ if (!roothide_init_with_executable(gExecutablePath)) return;
 		jbclient_cs_revalidate();
 #endif
 	}
+	roothide_app_startup_diagnostic(getprogname(), "constructor.end", 0);
 }

@@ -19,6 +19,9 @@ int jbclient_process_checkin(char **rootPathOut, char **bootUUIDOut, char **sand
 int jbclient_fork_fix(uint64_t childPid);
 int jbclient_cs_revalidate(void);
 int jbclient_jbsettings_get(const char *key, xpc_object_t *valueOut);
+// Typed reads leave valueOut unchanged when the service or reply is invalid.
+int jbclient_jbsettings_get_bool_checked(const char *key, bool *valueOut);
+int jbclient_jbsettings_get_double_checked(const char *key, double *valueOut);
 bool jbclient_jbsettings_get_bool(const char *key);
 uint64_t jbclient_jbsettings_get_uint64(const char *key);
 double jbclient_jbsettings_get_double(const char *key);
@@ -57,6 +60,7 @@ bool jbclient_blacklist_check_bundle(const char* bundle);
 int jbclient_trust_library_recurse(const char *libraryPath, void *addressInCaller);
 int jbclient_trust_executable_recurse(const char *executablePath, xpc_object_t preferredArchsArray);
 bool jbclient_dyld_patch_enabled();
+int jbclient_dyld_patch_enabled_get(bool *enabledOut);
 int jbclient_set_dyld_patch(bool enabled);
 /************** roothide specfic *************/
 

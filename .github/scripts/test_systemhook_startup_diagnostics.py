@@ -47,6 +47,15 @@ def source_checks():
     assert "python3 .github/scripts/test_systemhook_startup_diagnostics.py\n" in workflow
     main = (SOURCE / "main.c").read_text(encoding="utf-8")
     roothider = (SOURCE / "roothider_main.c").read_text(encoding="utf-8")
+    initializer = extract_function(main, "__attribute__((constructor)) static void initializer(void)")
+    for event in ("constructor.begin", "root_binding.end", "process_checkin.failed",
+                  "process_checkin.end", "runtime_init.begin", "runtime_init.failed",
+                  "runtime_init.end", "executable_path.end", "process_hooks.begin",
+                  "process_hooks.failed", "process_hooks.end", "constructor.end"):
+        assert f'roothide_app_startup_diagnostic(getprogname(), "{event}"' in initializer, event
+    ui = (ROOT / "Application/Dopamine/UI/DOUIManager.m").read_text(encoding="utf-8")
+    for uid in (0, 501):
+        assert f"Dopamine-app-startup-{uid}.log" in ui
     for text, signature in [
         (main, "static bool load_required_runtime_dylib("),
         (roothider, "bool roothide_init_with_checkin("),
@@ -138,6 +147,104 @@ int main(int argc, char **argv) {
     assert(errno == EDOM);
     assert(rmdir(test_log_path) == 0);
     puts("PASS: runtime diagnostics append, truncation, errno, link and FIFO failures");
+    return 0;
+}
+'''
+
+APP_HARNESS = r'''
+#include <assert.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
+static const char *test_log_path;
+static uid_t simulated_uid;
+static bool wrong_owner;
+static uid_t test_geteuid(void) { return simulated_uid; }
+static int test_fstat(int fd, struct stat *info) {
+    int result = fstat(fd, info);
+    // Model iOS UIDs on hosts whose test runner has a different real UID.
+    // All other fields come from the actual filesystem operation.
+    if (result == 0) info->st_uid = wrong_owner ? simulated_uid + 1 : simulated_uid;
+    return result;
+}
+#define ROOTHIDE_RUNTIME_DIAGNOSTIC_PATH test_log_path
+#define ROOTHIDE_APP_STARTUP_DIAGNOSTIC_PREFIX test_log_path
+#define geteuid test_geteuid
+#define fstat test_fstat
+''' + '#include "' + (SOURCE / "common/runtime_diagnostics.c").as_posix() + '"\n' + r'''
+#undef geteuid
+#undef fstat
+static size_t read_file(const char *path, char *out, size_t capacity) {
+    int fd = open(path, O_RDONLY);
+    assert(fd >= 0);
+    ssize_t length = read(fd, out, capacity - 1);
+    assert(length >= 0);
+    out[length] = 0;
+    close(fd);
+    return (size_t)length;
+}
+int main(int argc, char **argv) {
+    assert(argc == 3);
+    test_log_path = argv[1];
+    char path[1024], buffer[8192];
+    for (unsigned i = 0; i < 2; i++) {
+        simulated_uid = i == 0 ? 0 : 501;
+        int count = snprintf(path, sizeof(path), "%s-%u.log", test_log_path, (unsigned)simulated_uid);
+        assert(count > 0 && (size_t)count < sizeof(path));
+        errno = EDOM;
+        roothide_app_startup_diagnostic(NULL, "constructor.begin", 0);
+        roothide_app_startup_diagnostic("Sileo", NULL, 0);
+        roothide_app_startup_diagnostic("OtherApp", "constructor.begin", 0);
+        roothide_app_startup_diagnostic("RootHideHelper", "constructor.begin", 0);
+        assert(errno == EDOM);
+        assert(access(path, F_OK) != 0);
+        errno = ERANGE;
+        roothide_app_startup_diagnostic("Sileo", "constructor.begin", 0);
+        assert(errno == ERANGE);
+        size_t first = read_file(path, buffer, sizeof(buffer));
+        assert(strstr(buffer, "app=Sileo event=constructor.begin result=0\n"));
+        errno = EDOM;
+        roothide_app_startup_diagnostic("RootHide", "runtime_init.failed", -1);
+        assert(errno == EDOM);
+        size_t total = read_file(path, buffer, sizeof(buffer));
+        assert(total > first);
+        assert(strstr(buffer, "app=RootHide event=runtime_init.failed result=-1\n"));
+        wrong_owner = true;
+        errno = EDOM;
+        roothide_app_startup_diagnostic("Sileo", "wrong-owner", 0);
+        assert(errno == EDOM);
+        assert(read_file(path, buffer, sizeof(buffer)) == total);
+        wrong_owner = false;
+        assert(unlink(path) == 0);
+
+        int fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        assert(fd >= 0 && write(fd, "sentinel", 8) == 8);
+        close(fd);
+        assert(symlink(argv[2], path) == 0);
+        errno = EDOM;
+        roothide_app_startup_diagnostic("RootHide", "symlink", 0);
+        assert(errno == EDOM);
+        assert(read_file(argv[2], buffer, sizeof(buffer)) == 8 && !strcmp(buffer, "sentinel"));
+        assert(unlink(path) == 0);
+        assert(mkfifo(path, 0600) == 0);
+        errno = EDOM;
+        roothide_app_startup_diagnostic("Sileo", "fifo", 0);
+        assert(errno == EDOM);
+        assert(unlink(path) == 0);
+    }
+    simulated_uid = 502;
+    errno = EDOM;
+    roothide_app_startup_diagnostic("Sileo", "constructor.begin", 0);
+    assert(errno == EDOM);
+    assert(snprintf(path, sizeof(path), "%s-502.log", test_log_path) > 0);
+    assert(access(path, F_OK) != 0);
+    puts("PASS: target App startup events, UID separation, filtered processes, errno, wrong-owner and symlink/FIFO failures");
     return 0;
 }
 '''
@@ -264,6 +371,7 @@ def main():
         tmp = Path(tmp)
         cases = {
             "diagnostics": FILE_HARNESS,
+            "app_startup": APP_HARNESS,
             "load_failures": LOAD_HARNESS
             + extract_function(main_source, "static bool load_required_runtime_dylib(")
             + "\n" + extract_function(roothider, "bool roothide_init_with_executable(")
@@ -277,7 +385,7 @@ def main():
                            "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
                            str(source), "-o", str(binary)], check=True)
             command = [str(binary)]
-            if name == "diagnostics":
+            if name in {"diagnostics", "app_startup"}:
                 command += [str(tmp / "runtime.log"), str(tmp / "sentinel")]
             subprocess.run(command, check=True, timeout=20)
 

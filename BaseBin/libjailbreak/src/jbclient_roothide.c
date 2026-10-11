@@ -288,6 +288,21 @@ int jbclient_trust_library_recurse(const char *libraryPath, void *addressInCalle
 	return -1;
 }
 
+int jbclient_dyld_patch_enabled_get(bool *enabledOut)
+{
+	if (!enabledOut) return -1;
+	xpc_object_t reply = jbserver_xpc_send(JBS_DOMAIN_ROOTHIDE, JBS_ROOTHIDE_DYLD_PATCH_ENABLED_GET, NULL);
+	if (!reply) return -1;
+	int result = (int)xpc_dictionary_get_int64(reply, "result");
+	if (result == 0) {
+		xpc_object_t enabled = xpc_dictionary_get_value(reply, "enabled");
+		if (enabled && xpc_get_type(enabled) == XPC_TYPE_BOOL) *enabledOut = xpc_bool_get_value(enabled);
+		else result = -1;
+	}
+	xpc_release(reply);
+	return result;
+}
+
 bool jbclient_dyld_patch_enabled()
 {
 	static bool enabled = false;

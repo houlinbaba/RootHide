@@ -272,7 +272,9 @@
         [self getLaunchedReleaseTag], commit,
         machine.machine, UIDevice.currentDevice.systemVersion, (unsigned)getuid(), (unsigned)geteuid()];
     NSArray *logs = @[[self rootHideStageLogPath], @ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
-        @ROOTHIDE_BOOTSTRAP_STAGE_LOG_PATH, @"/var/mobile/Library/Logs/CrashReporter/Dopamine-systemhook-init.log"];
+        @ROOTHIDE_BOOTSTRAP_STAGE_LOG_PATH, @"/var/mobile/Library/Logs/CrashReporter/Dopamine-systemhook-init.log",
+        @"/var/mobile/Library/Logs/CrashReporter/Dopamine-app-startup-0.log",
+        @"/var/mobile/Library/Logs/CrashReporter/Dopamine-app-startup-501.log"];
     NSArray *crashDirectories = @[@"/var/mobile/Library/Logs/CrashReporter", @"/var/mobile/Library/Logs/CrashReporter/Retired"];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NSString *report = DORootHideDiagnosticReport(header, logs, crashDirectories, root, [NSDate date]);

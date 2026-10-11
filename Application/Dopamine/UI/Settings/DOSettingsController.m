@@ -20,6 +20,10 @@
 #import "DOPSJetsamListItemsController.h"
 #import "DOButtonCell.h"
 #import "../DOSupporterLicense.h"
+#import "DORuntimeSettingsSnapshot.h"
+#import "../DORootHideDiagnostics.h"
+#import <libjailbreak/jbclient_xpc.h>
+#include <math.h>
 
 #pragma mark - Custom Glass page appearance
 
@@ -1157,6 +1161,47 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 
 #pragma mark - Getters & Setters
 
+- (DORuntimeSettingsSnapshot *)runtimeSettingsSnapshot
+{
+    static DORuntimeSettingsSnapshot *snapshot;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        snapshot = [[DORuntimeSettingsSnapshot alloc] initWithLoader:^NSDictionary<NSString *, NSNumber *> *(void) {
+            NSMutableDictionary<NSString *, NSNumber *> *values = [NSMutableDictionary dictionary];
+            bool enabled = false;
+            if (jbclient_jbsettings_get_bool_checked("markAppsAsDebugged", &enabled) == 0) {
+                values[@"appJITEnabled"] = @(enabled);
+            }
+            double multiplier = 0;
+            if (jbclient_jbsettings_get_double_checked("jetsamMultiplier", &multiplier) == 0) {
+                values[@"jetsamMultiplier"] = @((multiplier < 1 || !isfinite(multiplier)) ? 6 : ceil(multiplier * 2));
+            }
+            if (jbclient_dyld_patch_enabled_get(&enabled) == 0) {
+                values[@"dyldPatchEnabled"] = @(enabled);
+            }
+            // Inspect the file without changing this process's credentials.
+            // Unreadable state keeps the locally configured value as fallback.
+            NSString *status = nil;
+            NSData *data = DODiagnosticRead(@"/var/db/com.apple.xpc.launchd/disabled.plist", 1024 * 1024, NO, &status);
+            id disabled = data ? [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:nil error:nil] : nil;
+            if ([disabled isKindOfClass:[NSDictionary class]]) {
+                id entry = disabled[@"com.opa334.Dopamine.idownloadd"];
+                if (!entry || [entry isKindOfClass:[NSNumber class]]) values[@"idownloadEnabled"] = @(entry && ![entry boolValue]);
+            }
+            return values.copy;
+        }];
+    });
+    return snapshot;
+}
+
+- (id)readRuntimePreferenceValue:(PSSpecifier *)specifier
+{
+    DORuntimeSettingsSnapshot *snapshot = [self runtimeSettingsSnapshot];
+    __weak typeof(self) weakSelf = self;
+    [snapshot refreshWithCompletion:^{ [weakSelf reloadSpecifiers]; }];
+    return [snapshot runtimeValueForKey:[specifier propertyForKey:@"key"]] ?: [self readPreferenceValue:specifier];
+}
+
 - (void)shareRootHideStageLogPressed
 {
     [[DOUIManager sharedInstance] shareRootHideStageLogFromView:self.view];
@@ -1164,6 +1209,10 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 
 - (void)setPreferenceValue:(id)value specifier:(PSSpecifier *)specifier
 {
+    NSString *runtimeKey = [specifier propertyForKey:@"key"];
+    if ([@[@"appJITEnabled", @"jetsamMultiplier", @"dyldPatchEnabled", @"idownloadEnabled"] containsObject:runtimeKey] && [value isKindOfClass:[NSNumber class]]) {
+        [[self runtimeSettingsSnapshot] setRuntimeValue:value forKey:runtimeKey];
+    }
     NSString *key = [specifier propertyForKey:@"key"];
     [[DOPreferenceManager sharedManager] setPreferenceValue:value forKey:key];
 }
@@ -1182,7 +1231,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 {
     DOEnvironmentManager *envManager = [DOEnvironmentManager sharedManager];
     if (envManager.isJailbroken) {
-        return @([DOEnvironmentManager sharedManager].isIDownloadEnabled);
+        return [self readRuntimePreferenceValue:specifier];
     }
     return [self readPreferenceValue:specifier];
 }
@@ -1227,8 +1276,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 {
     DOEnvironmentManager *envManager = [DOEnvironmentManager sharedManager];
     if (envManager.isJailbroken) {
-        bool v = jbclient_jbsettings_get_bool("markAppsAsDebugged");
-        return @(v);
+        return [self readRuntimePreferenceValue:specifier];
     }
     return [self readPreferenceValue:specifier];
 }
@@ -1246,8 +1294,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 {
     DOEnvironmentManager *envManager = [DOEnvironmentManager sharedManager];
     if (envManager.isJailbroken) {
-        double v = jbclient_jbsettings_get_double("jetsamMultiplier");
-        return @((v < 1 || isnan(v)) ? 6 : ceil(v * 2));
+        return [self readRuntimePreferenceValue:specifier];
     }
     return [self readPreferenceValue:specifier];
 }
@@ -1699,7 +1746,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 {
     DOEnvironmentManager *envManager = [DOEnvironmentManager sharedManager];
     if (envManager.isJailbroken) {
-        return @(jbclient_dyld_patch_enabled());
+        return [self readRuntimePreferenceValue:specifier];
     }
     return [self readPreferenceValue:specifier];
 }

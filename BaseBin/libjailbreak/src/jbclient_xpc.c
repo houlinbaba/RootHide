@@ -246,6 +246,32 @@ int jbclient_jbsettings_get(const char *key, xpc_object_t *valueOut)
 	return -1;
 }
 
+int jbclient_jbsettings_get_bool_checked(const char *key, bool *valueOut)
+{
+	if (!key || !valueOut) return -1;
+	xpc_object_t value = NULL;
+	int result = jbclient_jbsettings_get(key, &value);
+	if (result == 0) {
+		if (value && xpc_get_type(value) == XPC_TYPE_BOOL) *valueOut = xpc_bool_get_value(value);
+		else result = -1;
+	}
+	if (value) xpc_release(value);
+	return result;
+}
+
+int jbclient_jbsettings_get_double_checked(const char *key, double *valueOut)
+{
+	if (!key || !valueOut) return -1;
+	xpc_object_t value = NULL;
+	int result = jbclient_jbsettings_get(key, &value);
+	if (result == 0) {
+		if (value && xpc_get_type(value) == XPC_TYPE_DOUBLE) *valueOut = xpc_double_get_value(value);
+		else result = -1;
+	}
+	if (value) xpc_release(value);
+	return result;
+}
+
 bool jbclient_jbsettings_get_bool(const char *key)
 {
 	xpc_object_t value;

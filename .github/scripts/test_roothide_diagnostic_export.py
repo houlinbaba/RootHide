@@ -28,10 +28,13 @@ int main(int argc, char **argv) {
         NSString *crashes = [base stringByAppendingPathComponent:@"crashes"];
         NSString *retired = [base stringByAppendingPathComponent:@"retired"];
         NSString *root = [base stringByAppendingPathComponent:@"root"];
+        NSString *rootCrashes = [root stringByAppendingPathComponent:@"var/mobile/Library/Logs/CrashReporter"];
         NSString *app = [root stringByAppendingPathComponent:@"Applications/RootHide.app"];
-        for (NSString *directory in @[crashes, retired, app, [root stringByAppendingPathComponent:@"usr/lib"]]) {
+        for (NSString *directory in @[crashes, retired, rootCrashes, app, [root stringByAppendingPathComponent:@"usr/lib"]]) {
             assert([[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil]);
         }
+        NSString *retiredAlias = [base stringByAppendingPathComponent:@"retired-alias"];
+        assert(symlink(retired.fileSystemRepresentation, retiredAlias.fileSystemRepresentation) == 0);
         NSString *lib = [root stringByAppendingPathComponent:@"usr/lib/libroothide.dylib"];
         NSString *link = [app stringByAppendingPathComponent:@".jbroot"];
         save(lib, @"library-placeholder", 1000000);
@@ -51,17 +54,32 @@ int main(int argc, char **argv) {
         save([crashes stringByAppendingPathComponent:@"OtherApp-new.ips"], @"PRIVATE_OTHER_APP", 1000000);
         save([crashes stringByAppendingPathComponent:@"RootHideHelper-new.ips"], @"PRIVATE_LOOKALIKE", 1000000);
         save([crashes stringByAppendingPathComponent:@"RootHide-new.txt"], @"NOT_CRASH", 1000000);
-        NSString *report = DORootHideDiagnosticReport(@"test-version", @[missingStage, initLog], @[crashes, retired], root, [NSDate dateWithTimeIntervalSince1970:1000000]);
+        save([rootCrashes stringByAppendingPathComponent:@"RootHide-rooted.ips"], @"ROOTHIDE_ROOTED_SELECTED", 1000000);
+        save([rootCrashes stringByAppendingPathComponent:@"Dopamine-app-startup-501.log"], @"ROOTED_STARTUP_SELECTED", 1000000);
+        save([rootCrashes stringByAppendingPathComponent:@"OtherApp-rooted.ips"], @"PRIVATE_ROOTED_OTHER_APP", 1000000);
+        NSString *report = DORootHideDiagnosticReport(@"test-version", @[missingStage, initLog], @[crashes, retired, retiredAlias], root, [NSDate dateWithTimeIntervalSince1970:1000000]);
         assert([report containsString:@"INIT_DLOPEN_ERROR"] && [report containsString:@"truncated:"]);
         assert(![report containsString:@"OLD_LOG_BYTES"]);
         assert([report containsString:@"SILEO_SELECTED"] && [report containsString:@"SILEO_RETIRED_SELECTED"]);
         assert([report containsString:@"ROOTHIDE_SELECTED"]);
+        assert([report containsString:@"ROOTHIDE_ROOTED_SELECTED"]);
+        assert([report containsString:@"ROOTED_STARTUP_SELECTED"]);
+        assert(DODiagnosticCrashDirectories(@[crashes, crashes], root).count == 3);
         assert([report containsString:@"unreadable (errno="] && [report containsString:@"link="]);
         assert([report containsString:[link stringByAppendingPathComponent:@"usr/lib/libroothide.dylib"]]);
-        for (NSString *secret in @[@"OLDEST_OMITTED", @"ANCIENT_OMITTED", @"FUTURE_OMITTED", @"PRIVATE_OTHER_APP", @"PRIVATE_LOOKALIKE", @"NOT_CRASH"]) {
+        for (NSString *secret in @[@"OLDEST_OMITTED", @"ANCIENT_OMITTED", @"FUTURE_OMITTED", @"PRIVATE_OTHER_APP", @"PRIVATE_ROOTED_OTHER_APP", @"PRIVATE_LOOKALIKE", @"NOT_CRASH"]) {
             assert(![report containsString:secret]);
         }
         assert(report.length < 270000);
+
+        // Collect alternate Apple crash filenames with the same App/age bounds.
+        save([rootCrashes stringByAppendingPathComponent:@"RootHide-new.crash"], @"ROOTHIDE_CRASH_SELECTED", 1000001);
+        save([rootCrashes stringByAppendingPathComponent:@"RootHide-new.ips.ca.synced"], @"ROOTHIDE_SYNCED_SELECTED", 1000002);
+        save([rootCrashes stringByAppendingPathComponent:@"RootHide-bad.ips.ca.synced.fake"], @"PRIVATE_FAKE_SUFFIX", 1000002);
+        NSString *alternate = DORootHideDiagnosticReport(@"test", @[], @[], root, [NSDate dateWithTimeIntervalSince1970:1000002]);
+        assert([alternate containsString:@"ROOTHIDE_CRASH_SELECTED"] && [alternate containsString:@"ROOTHIDE_SYNCED_SELECTED"]);
+        assert(![alternate containsString:@"ROOTHIDE_ROOTED_SELECTED"] && ![alternate containsString:@"PRIVATE_FAKE_SUFFIX"]);
+        assert(![alternate containsString:@"PRIVATE_ROOTED_OTHER_APP"]);
 
         // Refuse symlinks and special files instead of following/blocking on them.
         NSString *symlinkLog = [base stringByAppendingPathComponent:@"symlink.log"];
@@ -82,14 +100,14 @@ int main(int argc, char **argv) {
 
         // A missing stage and unreadable crash directory still yield a useful export.
         NSString *empty = DORootHideDiagnosticReport(@"test", @[missingStage], @[missingStage], nil, [NSDate dateWithTimeIntervalSince1970:1000000]);
-        assert([empty containsString:@"Crash directory"] && [empty containsString:@"No recent readable sileo .ips"]);
+        assert([empty containsString:@"Crash directory"] && [empty containsString:@"No recent sileo crash file"]);
         assert([empty containsString:@"Missing/unreadable files are not proof of success"]);
         assert([[NSFileManager defaultManager] removeItemAtPath:link error:nil]);
         assert(symlink("/missing-jailbreak-root", link.fileSystemRepresentation) == 0);
         NSMutableString *broken = [NSMutableString string];
         DOAppendDiagnosticPath(broken, link);
         assert([broken containsString:@"link=/missing-jailbreak-root"] && [broken containsString:@"realpath failed"]);
-        puts("PASS: empty-stage export, recent target crashes, cross-directory newest selection, size bounds, read errors, symlink/FIFO rejection, loader links");
+        puts("PASS: system/bootstrap target crashes, alternate filenames, inode deduplication, newest selection, size bounds, read errors, symlink/FIFO rejection, loader links");
     }
     return 0;
 }
@@ -109,6 +127,18 @@ def main():
     for forbidden in ('runAsRoot', 'runUnsandboxed', 'isJailbroken', 'jailbrokenVersion', 'HealthReport', 'jbclient_'):
         assert forbidden not in export, f'export must not wait for services: {forbidden}'
     assert 'test_roothide_diagnostic_export.py' in (ROOT / '.github/workflows/roothide.yml').read_text(encoding='utf-8')
+    collector = (UI / 'DORootHideDiagnostics.h').read_text(encoding='utf-8')
+    assert 'DODiagnosticCrashDirectories(crashDirectories, root)' in collector
+    assert 'var/mobile/Library/Logs/CrashReporter/Retired' in collector
+    home = (UI / 'DOMainViewController.m').read_text(encoding='utf-8')
+    assert 'identifier:@"roothide-diagnostics"' in home
+    assert 'shareRootHideStageLogFromView:self.view' in home
+    assert '[settingsCard addGestureRecognizer:' in home
+    assert 'action:@selector(shareRootHideLogFromLongPress:)' in home
+    gesture = home.split('- (void)shareRootHideLogFromLongPress:', 1)[1].split('- (void)applyCustomGlassHomeAppearance', 1)[0]
+    assert 'UIGestureRecognizerStateBegan' in gesture and 'shareRootHideStageLogFromView:gesture.view' in gesture
+    for uid in (0, 501):
+        assert f'Dopamine-app-startup-{uid}.log' in collector and f'Dopamine-app-startup-{uid}.log' in export
     for language in ('en', 'zh-Hans'):
         assert '"RootHide_Log_Export_Failed"' in (ROOT / f'Application/Dopamine/{language}.lproj/Localizable.strings').read_text(encoding='utf-8')
     print('PASS: background file collection, main-thread share, service-free export wiring', flush=True)
