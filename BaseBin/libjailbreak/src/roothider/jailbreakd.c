@@ -1346,13 +1346,14 @@ admission_failed:
     return NULL;
 }
 
-int jbdSpawnPatchChildEx(int pid, bool resume, bool forceDyldPatch)
+static int jbdSpawnPatchChildExInternal(int pid, bool resume, bool forceDyldPatch, bool deferResume)
 {
 	xpc_object_t message = xpc_dictionary_create_empty();
 	xpc_dictionary_set_uint64(message, "id", JBD_MSG_SPAWN_PATCH_CHILD);
 	xpc_dictionary_set_int64(message, "pid", pid);
 	xpc_dictionary_set_bool(message, "resume", resume);
 	xpc_dictionary_set_bool(message, "force-dyld-patch", forceDyldPatch);
+	if (deferResume) xpc_dictionary_set_bool(message, "spawn-defer-resume", true);
 	if (getpid() == 1) {
 		/* A timed-out request can remain queued in jailbreakd. Tie it to the
 		 * original process instance and a shared monotonic-clock deadline. */
@@ -1377,12 +1378,33 @@ int jbdSpawnPatchChildEx(int pid, bool resume, bool forceDyldPatch)
 			? xpc_dictionary_get_value(reply, "result") : NULL;
 		if (resultValue && xpc_get_type(resultValue) == XPC_TYPE_INT64) {
 			result = xpc_dictionary_get_int64(reply, "result");
+			if (deferResume) {
+				xpc_object_t ack = xpc_dictionary_get_value(reply, "spawn-defer-resume-ack");
+				if (!ack || xpc_get_type(ack) != XPC_TYPE_BOOL ||
+				    !xpc_dictionary_get_bool(reply, "spawn-defer-resume-ack")) {
+					/* An older jailbreakd may already have resumed the child.
+					 * Caller must NOT kill or resume on this ambiguous outcome. */
+					result = -2;
+				}
+			}
 		} else {
 			roothide_stage_log("jbd.launchd_patch.invalid_reply child=%d", pid);
 		}
 		xpc_release(reply);
 	}
 	return result;
+}
+
+int jbdSpawnPatchChildEx(int pid, bool resume, bool forceDyldPatch)
+{
+	return jbdSpawnPatchChildExInternal(pid, resume, forceDyldPatch, false);
+}
+
+/* Caller owns the final SIGCONT or SIGKILL. Server owns only the patch.
+ * -2 signals an incompatible server: do not signal the child. */
+int jbdSpawnPatchChildDeferred(int pid, bool resume)
+{
+	return jbdSpawnPatchChildExInternal(pid, resume, false, true);
 }
 
 int jbdSpawnPatchChild(int pid, bool resume)

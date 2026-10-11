@@ -17,6 +17,9 @@
 #include "sandbox.h"
 #include "roothider.h"
 
+extern int proc_get_pidversion(pid_t pid);
+extern int jbdSpawnPatchChildDeferred(int pid, bool resume);
+
 const char* HOOK_DYLIB_PATH = NULL;
 
 bool dyld_patch_fallback_enabled = false;
@@ -399,11 +402,23 @@ int roothide_systemhook___posix_spawn_posthook(pid_t *restrict pidp, const char 
 				// Trust-only helpers, such as APT transports, do not need a
 				// suspended-task patch. Resume them as requested by the caller.
 				if (should_resume) kill(pid, SIGCONT);
-			} else if(jbdSpawnPatchChild(pid, should_resume) != 0) { // jdb fault? kill
-				//just kill it instead of letting it hang forever, and the requester decides what to do later
-				kill(pid, SIGQUIT); //core dump
-				kill(pid, SIGKILL);
-				return 202;
+			} else {
+				int originalPidVersion = proc_get_pidversion(pid);
+				int patchResult = jbdSpawnPatchChildDeferred(pid, should_resume);
+				if (patchResult == 0 && should_resume) {
+					int currentPidVersion = proc_get_pidversion(pid);
+					if (originalPidVersion <= 0 || currentPidVersion != originalPidVersion ||
+					    kill(pid, SIGCONT) != 0) patchResult = -1;
+				}
+				if (patchResult != 0) {
+					/* -2 is a protocol mismatch: the old daemon may have resumed it. */
+					if (patchResult != -2 && originalPidVersion > 0 &&
+					    proc_get_pidversion(pid) == originalPidVersion) {
+						kill(pid, SIGQUIT);
+						kill(pid, SIGKILL);
+					}
+					return 202;
+				}
 			}
 		}
 	}

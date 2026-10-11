@@ -11,6 +11,7 @@
 #include <libjailbreak/roothider.h>
 
 extern int proc_get_pidversion(pid_t pid);
+extern int jbdSpawnPatchChildDeferred(int pid, bool resume);
 
 #include "../systemhook/src/common.h"
 #include "../systemhook/src/common/envbuf.h"
@@ -284,11 +285,21 @@ int roothide_launchd___posix_spawn_posthook(pid_t *restrict pidp, const char *re
 			/* The original child can exit during the bounded jailbreakd RPC.
 			 * Do not accidentally signal a different process after PID reuse. */
 			int originalPidVersion = proc_get_pidversion(pid);
-			if(jbdSpawnPatchChild(pid, should_resume) != 0) {
+			int patchResult = jbdSpawnPatchChildDeferred(pid, should_resume);
+			if (patchResult == 0 && should_resume) {
+				int currentPidVersion = proc_get_pidversion(pid);
+				if (originalPidVersion <= 0 || currentPidVersion != originalPidVersion ||
+				    kill(pid, SIGCONT) != 0) {
+					JBLogError("Failed to resume patched process (%d), pidversion before=%d after=%d",
+					           pid, originalPidVersion, currentPidVersion);
+					patchResult = -1;
+				}
+			}
+			if (patchResult != 0) {
 				int currentPidVersion = proc_get_pidversion(pid);
 				JBLogError("Failed to patch spawned process (%d) %s; pidversion before=%d after=%d",
 				           pid, path, originalPidVersion, currentPidVersion);
-				if (originalPidVersion > 0 && currentPidVersion == originalPidVersion) {
+				if (patchResult != -2 && originalPidVersion > 0 && currentPidVersion == originalPidVersion) {
 					/* Best-effort PID-version check; not atomic with kill(). */
 					kill(pid, SIGQUIT); // core dump
 					kill(pid, SIGKILL);

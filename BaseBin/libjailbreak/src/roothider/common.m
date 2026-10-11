@@ -782,16 +782,29 @@ int exec_cmd_roothide_spawn(pid_t* pidp, const char* path, const posix_spawn_fil
             /* Keep the original process identity across the potentially slow RPC. */
             int originalPidVersion = proc_get_pidversion(pid);
             roothide_stage_log("spawn.patch.begin pid=%d resume=%d version=%d", pid, should_resume, originalPidVersion);
-            int patchResult = jbdSpawnPatchChild(pid, should_resume);
+            int patchResult = jbdSpawnPatchChildDeferred(pid, should_resume);
+            if (patchResult == 0 && should_resume) {
+                int currentPidVersion = proc_get_pidversion(pid);
+                if (originalPidVersion <= 0 || currentPidVersion != originalPidVersion) {
+                    roothide_stage_log("spawn.resume.identity_changed pid=%d before=%d after=%d",
+                                      pid, originalPidVersion, currentPidVersion);
+                    patchResult = -1;
+                } else if (kill(pid, SIGCONT) != 0) {
+                    roothide_stage_log("spawn.resume.failed pid=%d errno=%d", pid, errno);
+                    patchResult = -1;
+                }
+            }
             roothide_stage_log("spawn.patch.end pid=%d result=%d", pid, patchResult);
             if(patchResult != 0) {
                 JBLogError("Failed to patch spawned process (%d) %s", pid, path);
                 /* Best-effort cleanup of the intentionally suspended child.
                  * PID version checks reduce (but do not eliminate) PID reuse races. */
                 int currentPidVersion = proc_get_pidversion(pid);
-                if (originalPidVersion > 0 && currentPidVersion == originalPidVersion) {
+                if (patchResult != -2 && originalPidVersion > 0 && currentPidVersion == originalPidVersion) {
                     int killResult = kill(pid, SIGKILL);
                     roothide_stage_log("spawn.patch.cleanup pid=%d result=%d errno=%d", pid, killResult, killResult ? errno : 0);
+                } else if (patchResult == -2) {
+                    roothide_stage_log("spawn.patch.cleanup.protocol_mismatch pid=%d", pid);
                 } else {
                     roothide_stage_log("spawn.patch.cleanup.identity_changed pid=%d before=%d after=%d", pid, originalPidVersion, currentPidVersion);
                 }

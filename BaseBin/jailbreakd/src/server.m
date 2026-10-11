@@ -78,7 +78,7 @@ static bool jailbreakd_spawn_patch_request_current(pid_t clientPid, pid_t pid,
 }
 
 static int64_t jailbreakd_patch_spawn_child(pid_t clientPid, pid_t pid, bool resume,
-                                           bool forceDyldPatch, int64_t expectedPidVersion,
+                                           bool deferResume, bool forceDyldPatch, int64_t expectedPidVersion,
                                            int64_t deadlineNs)
 {
     if (!jailbreakd_spawn_patch_request_current(clientPid, pid, expectedPidVersion, deadlineNs)) {
@@ -117,7 +117,7 @@ static int64_t jailbreakd_patch_spawn_child(pid_t clientPid, pid_t pid, bool res
         roothide_stage_log("jailbreakd.patch.stale_before_resume child=%d version=%lld", pid, (long long)expectedPidVersion);
         return -1;
     }
-    if (resume && kill(pid, SIGCONT) != 0) {
+    if (resume && !deferResume && kill(pid, SIGCONT) != 0) {
         int resumeErrno = errno;
         JBLogError("spawn patch resume failed for pid=%d errno=%d", pid, resumeErrno);
         roothide_stage_log("jailbreakd.patch.resume_failed child=%d errno=%d", pid, resumeErrno);
@@ -187,6 +187,13 @@ void jailbreakd_received_message(mach_port_t port)
 				}
 
 				case JBD_MSG_SPAWN_PATCH_CHILD: {
+					xpc_object_t deferValue = xpc_dictionary_get_value(message, "spawn-defer-resume");
+					if (deferValue && xpc_get_type(deferValue) != XPC_TYPE_BOOL) {
+						xpc_dictionary_set_int64(reply, "result", -1);
+						break;
+					}
+					bool deferResume = xpc_dictionary_get_bool(message, "spawn-defer-resume");
+					if (deferResume) xpc_dictionary_set_bool(reply, "spawn-defer-resume-ack", true);
 					pid_t pid = 0;
 					if (!jailbreakd_get_child_pid(message, &pid)) {
 						roothide_stage_log("jailbreakd.patch.invalid_child_pid client=%d", clientPid);
@@ -224,7 +231,7 @@ void jailbreakd_received_message(mach_port_t port)
 					xpc_object_t asyncReply = reply;
 					reply = nil;
 					dispatch_async(patchQueue, ^{
-						int64_t result = jailbreakd_patch_spawn_child(clientPid, pid, resume, forceDyldPatch,
+						int64_t result = jailbreakd_patch_spawn_child(clientPid, pid, resume, deferResume, forceDyldPatch,
                                                                      requestedVersion, requestDeadline);
 						xpc_dictionary_set_int64(asyncReply, "result", result);
 						jailbreakd_reply_message(msgId, asyncReply);

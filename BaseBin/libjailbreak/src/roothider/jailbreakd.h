@@ -44,6 +44,7 @@ int jbdSystemwideLog(const char* fmt, ...);
 
 int jbdSpawnPatchChildEx(int pid, bool resume, bool forceDyldPatch);
 int jbdSpawnPatchChild(int pid, bool resume);
+int jbdSpawnPatchChildDeferred(int pid, bool resume);
 int jbdSpawnExecStart(const char* execfile, bool resume);
 int jbdSpawnExecCancel(const char* execfile);
 int jbdExecTraceStart(const char* execfile, bool* traced);
