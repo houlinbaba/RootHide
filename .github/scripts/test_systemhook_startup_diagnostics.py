@@ -232,6 +232,10 @@ def main():
         compiler = ["xcrun", "clang"]
     else:
         compiler = [shutil.which("clang") or shutil.which("gcc") or "clang"]
+    # Darwin hides O_NOFOLLOW under a POSIX-only feature profile. Exercise
+    # the same Darwin interfaces available to the production Apple build.
+    feature_flags = (["-D_DARWIN_C_SOURCE"] if sys.platform == "darwin"
+                     else ["-D_POSIX_C_SOURCE=200809L"])
     with tempfile.TemporaryDirectory(prefix="systemhook_startup_") as tmp:
         tmp = Path(tmp)
         cases = {
@@ -245,7 +249,7 @@ def main():
             source = tmp / (name + ".c")
             binary = tmp / name
             source.write_text(content, encoding="utf-8")
-            subprocess.run(compiler + ["-std=c11", "-D_POSIX_C_SOURCE=200809L", "-Wall", "-Wextra", "-Werror",
+            subprocess.run(compiler + feature_flags + ["-std=c11", "-Wall", "-Wextra", "-Werror",
                            "-fsanitize=address,undefined", "-fno-omit-frame-pointer",
                            str(source), "-o", str(binary)], check=True)
             command = [str(binary)]
