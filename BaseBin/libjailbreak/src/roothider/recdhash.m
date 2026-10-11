@@ -1,5 +1,6 @@
 #include <libgen.h>
 #include <mach-o/dyld.h>
+#include <stddef.h>
 
 #include <choma/Fat.h>
 #include <choma/MachO.h>
@@ -10,6 +11,11 @@
 #include "../libjailbreak.h"
 #include "common.h"
 #include "log.h"
+#include "signature_policy.h"
+#include "../codesign.h"
+#include "../signatures.h"
+
+_Static_assert(ROOTHIDE_SIGNATURE_FLAG_ADHOC == CS_ADHOC, "signature flag mismatch");
 
 extern MachO* fat_find_preferred_slice(Fat* fat);
 
@@ -31,7 +37,63 @@ Fat* fat_init_for_writing(const char *filePath)
     MemoryStream *stream = file_stream_init_from_path(filePath, 0, FILE_STREAM_SIZE_AUTO, FILE_STREAM_FLAG_WRITABLE);
     if(!stream) return NULL;
 
-	return fat_init_from_memory_stream(stream);
+	Fat *fat = fat_init_from_memory_stream(stream);
+	if (!fat) memory_stream_free(stream);
+	return fat;
+}
+
+static bool roothide_is_code_directory_slot(uint32_t type)
+{
+	return type == CSSLOT_CODEDIRECTORY
+		|| (type >= CSSLOT_ALTERNATE_CODEDIRECTORIES && type < CSSLOT_ALTERNATE_CODEDIRECTORY_LIMIT);
+}
+
+static bool roothide_read_code_directory(CS_DecodedBlob *blob, bool usesSPTM,
+	CS_CodeDirectory *directoryOut, uint32_t *flagsOut)
+{
+	if (!blob) return false;
+	size_t size = csd_blob_get_size(blob);
+	if (size < offsetof(CS_CodeDirectory, scatterOffset)
+		|| size > ROOTHIDE_SIGNATURE_MAX_DIRECTORY_SIZE) return false;
+	uint8_t *bytes = malloc(size);
+	if (!bytes) return false;
+	bool valid = csd_blob_read(blob, 0, size, bytes) == 0
+		&& roothide_signature_normalized_flags(bytes, size, usesSPTM, flagsOut);
+	CS_CodeDirectory directory = {0};
+	if (valid) {
+		memcpy(&directory, bytes, size < sizeof(directory) ? size : sizeof(directory));
+		CODE_DIRECTORY_APPLY_BYTE_ORDER(&directory, BIG_TO_HOST_APPLIER);
+		bool hashShapeValid = (directory.hashType == CS_HASHTYPE_SHA160_160 && directory.hashSize == 20)
+			|| (directory.hashType == CS_HASHTYPE_SHA256_256 && directory.hashSize == 32)
+			|| (directory.hashType == CS_HASHTYPE_SHA256_160 && directory.hashSize == 20)
+			|| (directory.hashType == CS_HASHTYPE_SHA384_384 && directory.hashSize == 48);
+		valid = hashShapeValid && directory.nCodeSlots > 0
+			&& directory.pageSize <= 16 && (directory.pageSize != 0 || directory.nCodeSlots == 1)
+			&& directory.hashOffset <= size
+			&& (uint64_t)directory.nCodeSlots * directory.hashSize <= size - directory.hashOffset
+			&& (uint64_t)directory.nSpecialSlots * directory.hashSize <= directory.hashOffset;
+	}
+	free(bytes);
+	if (valid) *directoryOut = directory;
+	return valid;
+}
+
+int roothide_code_directories_need_normalization(CS_DecodedSuperBlob *superblob, bool usesSPTM)
+{
+	if (!superblob) return -1;
+	bool needsNormalization = false;
+	uint32_t seenSlots = 0;
+	for (CS_DecodedBlob *blob = superblob->firstBlob; blob; blob = blob->next) {
+		if (!roothide_is_code_directory_slot(blob->type)) continue;
+		unsigned slot = blob->type == CSSLOT_CODEDIRECTORY ? 0 : 1 + blob->type - CSSLOT_ALTERNATE_CODEDIRECTORIES;
+		if (seenSlots & (1u << slot)) return -1;
+		seenSlots |= 1u << slot;
+		CS_CodeDirectory directory;
+		uint32_t flags;
+		if (!roothide_read_code_directory(blob, usesSPTM, &directory, &flags)) return -1;
+		if (flags != directory.flags) needsNormalization = true;
+	}
+	return seenSlots ? needsNormalization : -1;
 }
 
 int calc_cdhash(uint8_t *cdBlob, size_t cdBlobSize, uint8_t hashtype, void *cdhashOut)
@@ -93,6 +155,7 @@ int ensure_randomized_cdhash(const char* inputPath, void* cdhashOut)
 */
 int ensure_randomized_cdhash_for_slice(const char* inputPath, uint64_t offset, void* cdhashOut)
 {
+	if (!inputPath || !cdhashOut) return -1;
 	JBLogDebug("ensure_randomized_cdhash_for_slice(slice=%llx): %s\n", offset, inputPath);
 
     Fat* fat = fat_init_for_writing(inputPath);
@@ -101,7 +164,7 @@ int ensure_randomized_cdhash_for_slice(const char* inputPath, uint64_t offset, v
 		return -1;
 	}
 
-    MachO *macho = (offset==-1) ? fat_find_preferred_slice(fat) : fat_find_slice_by_offset(fat, offset);
+    MachO *macho = (offset == UINT64_MAX) ? fat_find_preferred_slice(fat) : fat_find_slice_by_offset(fat, offset);
 	if(!macho) {
 		JBLogError("Error: failed to find preferred slice: %s\n", inputPath);
 		fat_free(fat);
@@ -173,8 +236,9 @@ int ensure_randomized_cdhash_for_slice(const char* inputPath, uint64_t offset, v
     JBLogDebug("super blob: %x %x %d\n", superblob->magic, BIG_TO_HOST(superblob->length), BIG_TO_HOST(superblob->count));
 
     CS_DecodedSuperBlob *decodedSuperblob = csd_superblob_decode(superblob);
-	if(!decodedSuperblob) {
+	if(!decodedSuperblob || !csd_superblob_is_adhoc_signed(decodedSuperblob)) {
 		JBLogError("Error: failed to decode superblob: %s\n", inputPath);
+		if (decodedSuperblob) csd_superblob_free(decodedSuperblob);
 		free(superblob);
 		fat_free(fat);
 		return -1;
@@ -186,6 +250,12 @@ int ensure_randomized_cdhash_for_slice(const char* inputPath, uint64_t offset, v
 		CS_DecodedBlob *bestCDBlob = csd_superblob_find_best_code_directory(decodedSuperblob);
 		if(!bestCDBlob) {
 			JBLogError("Error: failed to find best code directory: %s\n", inputPath);
+			break;
+		}
+		bool usesSPTM = ksymbol(SPTMArgs) != 0;
+		// Validate every directory before changing the executable's jbrand.
+		if (roothide_code_directories_need_normalization(decodedSuperblob, usesSPTM) < 0) {
+			JBLogError("Error: invalid code directory metadata: %s", inputPath);
 			break;
 		}
 
@@ -218,21 +288,28 @@ int ensure_randomized_cdhash_for_slice(const char* inputPath, uint64_t offset, v
 			BLOB_INDEX_APPLY_BYTE_ORDER(&curIndex, BIG_TO_HOST_APPLIER);
 			//JBLogDebug("decoding %u (type: %x, offset: 0x%x)\n", i, curIndex.type, curIndex.offset);
 
-			bool isCodeDirectory = curIndex.type == CSSLOT_CODEDIRECTORY
-				|| (curIndex.type >= CSSLOT_ALTERNATE_CODEDIRECTORIES
-					&& curIndex.type < CSSLOT_ALTERNATE_CODEDIRECTORY_LIMIT);
+			bool isCodeDirectory = roothide_is_code_directory_slot(curIndex.type);
 			if(isCodeDirectory)
 			{
 				CS_DecodedBlob *codeDirectoryBlob = csd_superblob_find_blob(decodedSuperblob, curIndex.type, NULL);
 				CS_CodeDirectory codeDir;
-				if (!codeDirectoryBlob || csd_blob_read(codeDirectoryBlob, 0, sizeof(codeDir), &codeDir) != 0) {
+				uint32_t normalizedFlags;
+				if (!roothide_read_code_directory(codeDirectoryBlob, usesSPTM, &codeDir, &normalizedFlags)) {
 					JBLogError("Error: failed to read code directory type %x: %s\n", curIndex.type, inputPath);
 					codeDirectoryUpdateFailed = true;
 					break;
 				}
 
-				CODE_DIRECTORY_APPLY_BYTE_ORDER(&codeDir, BIG_TO_HOST_APPLIER);
-				uint8_t pageHash[codeDir.hashSize];
+				if (normalizedFlags != codeDir.flags) {
+					uint32_t encodedFlags = HOST_TO_BIG(normalizedFlags);
+					if (memory_stream_write(fat->stream, macho->archDescriptor.offset + linkedit.dataoff
+						+ curIndex.offset + offsetof(CS_CodeDirectory, flags), sizeof(encodedFlags), &encodedFlags) != 0) {
+						JBLogError("Error: failed to normalize code directory flags: %s", inputPath);
+						codeDirectoryUpdateFailed = true;
+						break;
+					}
+				}
+				uint8_t pageHash[CC_SHA384_DIGEST_LENGTH];
 				if(!code_directory_calculate_page_hash(&codeDir, macho, 0, pageHash)) {
 					JBLogError("Error: failed to calculate page hash for code directory type %x: %s\n", curIndex.type, inputPath);
 					codeDirectoryUpdateFailed = true;

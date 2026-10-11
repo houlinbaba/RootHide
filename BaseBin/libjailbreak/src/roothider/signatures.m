@@ -3,6 +3,7 @@
 #include <choma/Host.h>
 #include <mach-o/dyld.h>
 #include "../trustcache.h"
+#include "../signatures.h"
 #include "../roothider.h"
 #include "../jbroot.h"
 
@@ -46,8 +47,6 @@ MachO* fat_find_preferred_slice(Fat *fat)
 
 	return candidateSlice;
 }
-
-extern bool csd_superblob_is_adhoc_signed(CS_DecodedSuperBlob *superblob);
 
 NSString* resolveLoaderExecutablePaths(NSString *loadPath, NSString *loaderPath, NSString *mainExecutablePath)
 {
@@ -319,15 +318,22 @@ static void recurse_handler(NSString *loadPath, NSString *loaderPath, NSString *
 				if (csd_superblob_calculate_best_cdhash(decodedSuperblob, cdhash, NULL) == 0) {
 					if (!cdhashesContains(cdhash)) {
 						bool alreadyTrusted = is_cdhash_trustcached(cdhash);
+						int normalization = ksymbol(SPTMArgs)
+							? roothide_code_directories_need_normalization(decodedSuperblob, true) : 0;
+						if (normalization < 0) {
+							JBLogError("Invalid TXM code directory metadata: %s", realLoadPath.fileSystemRepresentation);
+							if (collectionFailed) *collectionFailed = true;
+						}
 
-						// D1 invariant: repeated spawn/dlopen must not prepare or upload the
-						// same final cdhash again. Dependency traversal below still runs.
-						if (!alreadyTrusted) {
+						// An old trusted hash can still have TXM-invalid flags. Repair it
+						// once; already-normalized trusted files retain the no-write path.
+						if (normalization >= 0 && (!alreadyTrusted || normalization > 0)) {
 							int ret = ensure_randomized_cdhash_for_slice(realLoadPath.fileSystemRepresentation, macho->archDescriptor.offset, cdhash);
 							if (ret == 0) {
-								cdhashesAdd(cdhash);
+								if (!cdhashesContains(cdhash) && !is_cdhash_trustcached(cdhash)) cdhashesAdd(cdhash);
 							} else {
 								JBLogError("ensure_randomized_cdhash_for_slice(%llx) failed: %s -> (%d)", macho->archDescriptor.offset, realLoadPath.fileSystemRepresentation, ret);
+								if (collectionFailed) *collectionFailed = true;
 							}
 						}
 					}

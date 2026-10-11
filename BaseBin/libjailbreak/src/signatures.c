@@ -163,13 +163,35 @@ int file_collect_untrusted_cdhashes(int fd, cdhash_t **cdhashesOut, uint32_t *cd
 		}
 		if (macho_is_mappable(macho)) {
 			cdhash_t cdhash;
-			if (macho_parse_code_signature(macho, cdhash) && !is_cdhash_trustcached(cdhash)) {
+			bool isAdhocSigned = false;
+			int normalization = 0;
+			CS_SuperBlob *superblob = macho_read_code_signature(macho);
+			if (superblob) {
+				CS_DecodedSuperBlob *decodedSuperblob = csd_superblob_decode(superblob);
+				if (decodedSuperblob) {
+					isAdhocSigned = csd_superblob_is_adhoc_signed(decodedSuperblob)
+						&& csd_superblob_calculate_best_cdhash(decodedSuperblob, cdhash, NULL) == 0;
+					if (isAdhocSigned && ksymbol(SPTMArgs)) {
+						normalization = roothide_code_directories_need_normalization(decodedSuperblob, true);
+					}
+					csd_superblob_free(decodedSuperblob);
+				}
+				free(superblob);
+			}
+			if (normalization < 0) {
+				status = ENOEXEC;
+				*stop = true;
+				return;
+			}
+			if (isAdhocSigned && (!is_cdhash_trustcached(cdhash) || normalization > 0)) {
 				status = ensure_randomized_cdhash_for_slice(filepath, macho->archDescriptor.offset, cdhash);
 				if (status != 0) {
 					JBLogError("Failed to ensure randomized cdhash for %s (status=%d)", filepath, status);
 					*stop = true;
 					return;
 				}
+				// Preparation changes the hash. Only collect the final, untrusted hash.
+				if (is_cdhash_trustcached(cdhash)) return;
 				cdhash_t *newCdhashes = realloc(cdhashes, (cdhashCount + 1) * sizeof(cdhash_t));
 				if (!newCdhashes) {
 					status = ENOMEM;

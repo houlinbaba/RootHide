@@ -17,6 +17,9 @@ struct siginfo {
 typedef uint8_t cdhash_t[CS_CDHASH_LEN];
 
 bool code_signature_calculate_adhoc_cdhash(CS_SuperBlob *superblob, cdhash_t cdhashOut);
+bool csd_superblob_is_adhoc_signed(CS_DecodedSuperBlob *superblob);
+// -1: invalid directory; 0: flags already valid; 1: flags need preparation.
+int roothide_code_directories_need_normalization(CS_DecodedSuperBlob *superblob, bool usesSPTM);
 void fat_collect_untrusted_cdhashes(Fat *fat, cdhash_t **cdhashesOut, uint32_t *cdhashCountOut);
 int file_collect_untrusted_cdhashes(int fd, cdhash_t **cdhashesOut, uint32_t *cdhashCountOut);
 int file_collect_untrusted_cdhashes_by_path(const char *path, cdhash_t **cdhashesOut, uint32_t *cdhashCountOut);
