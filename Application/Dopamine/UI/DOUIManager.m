@@ -6,12 +6,15 @@
 //
 
 #import "DOUIManager.h"
+#import "DORootHideDiagnostics.h"
+#import <libjailbreak/info.h>
 #import <libjailbreak/roothide_stage.h>
 #import "DOEnvironmentManager.h"
 #import "DOThemeManager.h"
 #import "DOTheme.h"
 #import "NSString+Version.h"
 #import <pthread.h>
+#import <sys/utsname.h>
 
 @implementation DOUIManager
 
@@ -254,26 +257,54 @@
 
 - (void)shareRootHideStageLogFromView:(UIView *)sourceView
 {
-    NSString *log = [NSString stringWithContentsOfFile:[self rootHideStageLogPath] encoding:NSUTF8StringEncoding error:nil];
-    UIViewController *presenter = sourceView.window.rootViewController;
-    while (presenter.presentedViewController) presenter = presenter.presentedViewController;
-    if (!log.length) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Menu_Share_RootHide_Log") message:DOLocalizedString(@"RootHide_Log_Unavailable") preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_OK") style:UIAlertActionStyleDefault handler:nil]];
-        [presenter presentViewController:alert animated:YES completion:nil];
-        return;
-    }
-    NSMutableString *combinedLog = [log mutableCopy];
-    for (NSString *path in @[@ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH, @ROOTHIDE_BOOTSTRAP_STAGE_LOG_PATH]) {
-        NSString *serviceLog = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-        [combinedLog appendFormat:@"\n\n--- %@ ---\n%@", path.lastPathComponent,
-            serviceLog.length ? serviceLog : @"No readable service log. This does not establish whether the service started."];
-    }
-    // Share a snapshot so a still-running stage cannot change the shared text.
-    UIActivityViewController *share = [[UIActivityViewController alloc] initWithActivityItems:@[combinedLog.copy] applicationActivities:nil];
-    share.popoverPresentationController.sourceView = sourceView;
-    share.popoverPresentationController.sourceRect = sourceView.bounds;
-    [presenter presentViewController:share animated:YES completion:nil];
+    if (_rootHideExportInProgress || !sourceView.window) return;
+    _rootHideExportInProgress = YES;
+    // Use the already cached path. Do not synchronously query an unhealthy service.
+    const char *rootPath = jbinfo(rootPath);
+    NSString *root = rootPath ? [NSString stringWithUTF8String:rootPath] : nil;
+    struct utsname machine = {0};
+    uname(&machine);
+    NSString *commit = @"release";
+#ifdef NIGHTLY
+    commit = @COMMIT_HASH;
+#endif
+    NSString *header = [NSString stringWithFormat:@"App: %@ (%@)\nDevice: %s / iOS %@\nuid=%u euid=%u",
+        [self getLaunchedReleaseTag], commit,
+        machine.machine, UIDevice.currentDevice.systemVersion, (unsigned)getuid(), (unsigned)geteuid()];
+    NSArray *logs = @[[self rootHideStageLogPath], @ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+        @ROOTHIDE_BOOTSTRAP_STAGE_LOG_PATH, @"/var/mobile/Library/Logs/CrashReporter/Dopamine-systemhook-init.log"];
+    NSArray *crashDirectories = @[@"/var/mobile/Library/Logs/CrashReporter", @"/var/mobile/Library/Logs/CrashReporter/Retired"];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        NSString *report = DORootHideDiagnosticReport(header, logs, crashDirectories, root, [NSDate date]);
+        NSString *directory = [NSTemporaryDirectory() stringByAppendingPathComponent:[@"RootHideDiagnostics-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+        NSString *path = [directory stringByAppendingPathComponent:@"RootHide-diagnostics.txt"];
+        NSError *error = nil;
+        BOOL saved = [[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:&error];
+        if (saved) saved = [report writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:&error];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self->_rootHideExportInProgress = NO;
+            UIViewController *presenter = sourceView.window.rootViewController;
+            while (presenter.presentedViewController) presenter = presenter.presentedViewController;
+            if (!presenter || !saved) {
+                [[NSFileManager defaultManager] removeItemAtPath:directory error:nil];
+                if (presenter) {
+                    UIAlertController *alert = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Menu_Share_RootHide_Log") message:DOLocalizedString(@"RootHide_Log_Export_Failed") preferredStyle:UIAlertControllerStyleAlert];
+                    [alert addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_OK") style:UIAlertActionStyleDefault handler:nil]];
+                    [presenter presentViewController:alert animated:YES completion:nil];
+                }
+                return;
+            }
+            UIActivityViewController *share = [[UIActivityViewController alloc] initWithActivityItems:@[[NSURL fileURLWithPath:path]] applicationActivities:nil];
+            share.popoverPresentationController.sourceView = sourceView;
+            share.popoverPresentationController.sourceRect = sourceView.bounds;
+            share.completionWithItemsHandler = ^(UIActivityType activityType, BOOL completed, NSArray *returnedItems, NSError *activityError) {
+                dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                    [[NSFileManager defaultManager] removeItemAtPath:directory error:nil];
+                });
+            };
+            [presenter presentViewController:share animated:YES completion:nil];
+        });
+    });
 }
 
 - (void)shareLogRecordFromView:(UIView *)sourceView

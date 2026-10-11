@@ -152,4 +152,5 @@
 "Settings_Disable_Update" = "Disable Update";
 "Menu_Share_RootHide_Log" = "Share RootHide Log";
 "RootHide_Log_Unavailable" = "No saved RootHide stage log is available.";
+"RootHide_Log_Export_Failed" = "Could not create the RootHide diagnostic export. Try again.";
 "Userspace_Reboot_Failed_Format" = "The userspace reboot command failed (result: %d). Open Settings and share the RootHide log.";
