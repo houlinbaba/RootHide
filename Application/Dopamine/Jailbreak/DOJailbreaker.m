@@ -33,6 +33,7 @@
 #import <libjailbreak/roothide_stage.h>
 #import <libjailbreak/credentials.h>
 #import <libproc.h>
+#import <sys/proc_info.h>
 #import <choma/Fat.h>
 #import <choma/MachO.h>
 #import <errno.h>

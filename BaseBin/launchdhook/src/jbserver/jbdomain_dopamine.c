@@ -4,6 +4,7 @@
 #include <libjailbreak/codesign.h>
 #include <libjailbreak/libjailbreak.h>
 #include <libproc.h>
+#include <sys/proc_info.h>
 #include <libjailbreak/credentials.h>
 #include <errno.h>
 
