@@ -199,6 +199,9 @@ jobs:
       - name: RootHide TXM signature preparation regressions
         run: python3 .github/scripts/test_roothide_txm_signatures.py
 
+      - name: RootHide iOS 17 credential ownership regressions
+        run: python3 .github/scripts/test_roothide_credentials.py
+
       - name: Litehook TPRO write scope regressions
         run: python3 .github/scripts/test_litehook_tpro.py
 

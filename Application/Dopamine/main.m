@@ -11,8 +11,21 @@
 #import "DOEnvironmentManager.h"
 #import <libjailbreak/info.h>
 #import <libjailbreak/jbclient_xpc.h>
+#include <unistd.h>
+#include <errno.h>
+
+static long credential_helper_syscall(int number, uintptr_t a, uintptr_t b, uintptr_t c)
+{
+    long r = syscall(number, a, b, c);
+    return r < 0 ? -errno : r;
+}
+#define RH_CREDENTIAL_SYSCALL(number, a, b, c) credential_helper_syscall(number, (uintptr_t)(a), (uintptr_t)(b), (uintptr_t)(c))
+#include <libjailbreak/credential_helper.h>
 
 int main(int argc, char * argv[]) {
+    // Before the first jailbreak there is no patched dyld. Handle the donor
+    // here, before any environment manager/check-in/UIApplication setup.
+    if (rh_credential_helper_main(argc, argv)) return 0;
     if (argc >= 3) {
         if (!strcmp(argv[1], "trollstore")) {
             if (!strcmp(argv[2], "delete-bootstrap")) {

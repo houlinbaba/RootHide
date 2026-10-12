@@ -31,6 +31,8 @@
 #import <libjailbreak/kcall_arm64.h>
 #import <libjailbreak/basebin_gen.h>
 #import <libjailbreak/roothide_stage.h>
+#import <libjailbreak/credentials.h>
+#import <libproc.h>
 #import <choma/Fat.h>
 #import <choma/MachO.h>
 #import <errno.h>
@@ -293,19 +295,35 @@ sets[idx] = NULL;
 - (NSError *)elevatePrivileges
 {
     uint64_t proc = proc_self();
-    uint64_t ucred = proc_ucred(proc);
-    
-    // Get uid 0
-    kwrite32(proc + koffsetof(proc, svuid), 0);
-    kwrite32(ucred + koffsetof(ucred, svuid), 0);
-    kwrite32(ucred + koffsetof(ucred, ruid), 0);
-    kwrite32(ucred + koffsetof(ucred, uid), 0);
-    
-    // Get gid 0
-    kwrite32(proc + koffsetof(proc, svgid), 0);
-    kwrite32(ucred + koffsetof(ucred, rgid), 0);
-    kwrite32(ucred + koffsetof(ucred, svgid), 0);
-    kwrite32(ucred + koffsetof(ucred, groups), 0);
+    if (@available(iOS 17.0, *)) {
+        int r = proc_credential_read(proc, &_bootstrapOriginalIdentity);
+        char executable[PROC_PIDPATHINFO_MAXSIZE];
+        if (!r && proc_pidpath(getpid(), executable, sizeof(executable)) <= 0) r = ESRCH;
+        struct rh_credential root = _bootstrapOriginalIdentity;
+        root.uid = root.ruid = root.svuid = 0;
+        root.gid = root.rgid = root.svgid = root.groups[0] = 0;
+        if (!r) r = proc_credential_set(proc, executable, &root);
+        if (r) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot
+                                     userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to install kernel-generated root credentials: %d", r]}];
+        _bootstrapIdentityActive = YES;
+    }
+    else {
+        uint64_t ucred = proc_ucred(proc);
+
+        // Get uid 0
+        kwrite32(proc + koffsetof(proc, svuid), 0);
+        kwrite32(ucred + koffsetof(ucred, svuid), 0);
+        kwrite32(ucred + koffsetof(ucred, ruid), 0);
+        kwrite32(ucred + koffsetof(ucred, uid), 0);
+
+        // Get gid 0
+        kwrite32(proc + koffsetof(proc, svgid), 0);
+        kwrite32(ucred + koffsetof(ucred, rgid), 0);
+        kwrite32(ucred + koffsetof(ucred, svgid), 0);
+        kwrite32(ucred + koffsetof(ucred, groups), 0);
+        uint64_t label = kread_ptr(ucred + koffsetof(ucred, label));
+        mac_label_set(label, 1, -1);
+    }
     
     // Add P_SUGID
     uint32_t flag = 0;
@@ -320,8 +338,8 @@ sets[idx] = NULL;
     if (getgid() != 0) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to get root, gid still %d", getgid()]}];
     
     // Unsandbox
-    uint64_t label = kread_ptr(ucred + koffsetof(ucred, label));
-    mac_label_set(label, 1, -1);
+    // On iOS 17 the donor inherits this executable's TrollStore sandbox
+    // entitlement. Do not mutate the MAC label of a hashed credential.
     NSError *error = nil;
     [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"/var" error:&error];
     if (error) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedUnsandbox userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to unsandbox, /var does not seem accessible (%s)", error.description.UTF8String]}];
@@ -611,17 +629,18 @@ void *boomerang_server(struct boomerang_info *info)
 
 - (NSError *)cleanUpPostExploitation
 {
-    if (@available(iOS 17.0, *)) {
-        uint64_t proc = proc_self();
-        uint64_t ucred = proc_ucred(proc);
-
-        // Restore the temporary root credentials before returning to userspace.
-        kwrite32(ucred + koffsetof(ucred, svuid), 501);
-        kwrite32(ucred + koffsetof(ucred, ruid), 501);
-        kwrite32(ucred + koffsetof(ucred, uid), 501);
-        kwrite32(ucred + koffsetof(ucred, rgid), 501);
-        kwrite32(ucred + koffsetof(ucred, svgid), 501);
-        kwrite32(ucred + koffsetof(ucred, groups), 501);
+    if (_bootstrapIdentityActive) {
+        char executable[PROC_PIDPATHINFO_MAXSIZE];
+        int r = proc_pidpath(getpid(), executable, sizeof(executable)) > 0 ?
+            proc_credential_set(proc_self(), executable, &_bootstrapOriginalIdentity) : ESRCH;
+        if (r) {
+            // Several failure callers ignore cleanup's NSError. Do not let
+            // those callers return to UIKit with the bootstrap root identity.
+            roothide_stage_file_log([[DOUIManager sharedInstance] rootHideStageLogPath].fileSystemRepresentation,
+                                    "bootstrap.credential_restore.failed result=%d exiting_app=1", r);
+            exit(EXIT_FAILURE);
+        }
+        _bootstrapIdentityActive = NO;
     }
     return nil;
 }
@@ -692,7 +711,10 @@ void *boomerang_server(struct boomerang_info *info)
 
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Elevating Privileges") debug:NO];
     *errOut = [self elevatePrivileges];
-    if (*errOut) return;
+    if (*errOut) {
+        [self cleanUpPostExploitation];
+        return;
+    }
     *errOut = [self showNonDefaultSystemApps];
     if (*errOut) {
         [self cleanUpPostExploitation];

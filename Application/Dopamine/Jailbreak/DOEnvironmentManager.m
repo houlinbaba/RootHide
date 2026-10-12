@@ -234,27 +234,48 @@ extern char **environ;
 
 - (void)runAsRoot:(void (^)(void))rootBlock
 {
-	uid_t originalUser = geteuid();
-	gid_t originalGroup = getegid();
-	roothide_stage_log("privilege.enter uid=%u euid=%u gid=%u egid=%u",
-	                   (unsigned)getuid(), (unsigned)originalUser,
-	                   (unsigned)getgid(), (unsigned)originalGroup);
-	if (originalUser == 0 && originalGroup == 0) {
-		rootBlock();
-		return;
-	}
-
-	int rootResult = jbclient_dopamine_get_root();
-	roothide_stage_log("privilege.set_root server_result=%d uid=%u euid=%u gid=%u egid=%u",
-	                   rootResult, (unsigned)getuid(), (unsigned)geteuid(),
-	                   (unsigned)getgid(), (unsigned)getegid());
-	if (rootResult == 0) {
-		rootBlock();
-		int dropResult = jbclient_dopamine_drop_root();
-		roothide_stage_log("privilege.drop_root server_result=%d uid=%u euid=%u gid=%u egid=%u",
-		                   dropResult, (unsigned)getuid(), (unsigned)geteuid(),
-		                   (unsigned)getgid(), (unsigned)getegid());
-	}
+    static NSRecursiveLock *identityLock;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ identityLock = [NSRecursiveLock new]; });
+    [identityLock lock];
+    @try {
+        uid_t originalUser = geteuid();
+        gid_t originalGroup = getegid();
+        roothide_stage_log("privilege.enter uid=%u euid=%u gid=%u egid=%u",
+                           (unsigned)getuid(), (unsigned)originalUser,
+                           (unsigned)getgid(), (unsigned)originalGroup);
+        if (originalUser == 0 && originalGroup == 0) {
+            rootBlock();
+            return;
+        }
+        int rootResult = jbclient_dopamine_get_root();
+        roothide_stage_log("privilege.set_root server_result=%d uid=%u euid=%u gid=%u egid=%u",
+                           rootResult, (unsigned)getuid(), (unsigned)geteuid(),
+                           (unsigned)getgid(), (unsigned)getegid());
+        if (rootResult == 0) {
+            @try {
+                rootBlock();
+            }
+            @finally {
+                int dropResult = jbclient_dopamine_drop_root();
+                roothide_stage_log("privilege.drop_root server_result=%d uid=%u euid=%u gid=%u egid=%u",
+                                   dropResult, (unsigned)getuid(), (unsigned)geteuid(),
+                                   (unsigned)getgid(), (unsigned)getegid());
+                // Never return to UIKit in a temporary root identity when the
+                // server cannot restore it. Record the failure even outside an
+                // active stage-log session before ending the application.
+                if (dropResult != 0 || geteuid() != originalUser || getegid() != originalGroup) {
+                    roothide_stage_log("privilege.restore.failed exiting_app=1");
+                    roothide_stage_file_log([[DOUIManager sharedInstance] rootHideStageLogPath].fileSystemRepresentation,
+                                            "privilege.restore.failed result=%d exiting_app=1", dropResult);
+                    exit(EXIT_FAILURE);
+                }
+            }
+        }
+    }
+    @finally {
+        [identityLock unlock];
+    }
 }
 
 - (int)spawnJbctlAsRootWithArgs:(NSArray *)args
@@ -262,8 +283,9 @@ extern char **environ;
     // --waitfor was introduced in Dopamine 3.0.5. Keep the suspended-spawn
     // fallback only for an already-installed older jailbreak.
     bool needsLegacySolution = false;
-    if (self.jailbrokenVersion) {
-        needsLegacySolution = ([self.jailbrokenVersion compare:@"3.0.5" options:NSNumericSearch] == NSOrderedAscending);
+    NSString *installedVersion = self.jailbrokenVersion;
+    if (installedVersion) {
+        needsLegacySolution = ([installedVersion compare:@"3.0.5" options:NSNumericSearch] == NSOrderedAscending);
     }
 
     size_t argCapacity = args.count + 4;

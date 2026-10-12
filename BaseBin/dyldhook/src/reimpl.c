@@ -7,6 +7,23 @@
 
 #include "dyld.h"
 
+// The credential donor runs before libc has initialized TLS. Return negative
+// errno directly instead of calling cerror (which writes thread-local errno).
+__attribute__((naked)) int64_t msyscall_noerrno(uint64_t syscall, ...)
+{
+    asm(
+        "mov x16, x0\n"
+        "ldp x0, x1, [sp]\n"
+        "ldp x2, x3, [sp, 0x10]\n"
+        "ldp x4, x5, [sp, 0x20]\n"
+        "ldp x6, x7, [sp, 0x30]\n"
+        "svc 0x80\n"
+        "b.cc 1f\n"
+        "neg x0, x0\n"
+        "1: ret\n"
+    );
+}
+
 __attribute__((naked)) uint64_t msyscall_errno(uint64_t syscall, ...)
 {
     asm(

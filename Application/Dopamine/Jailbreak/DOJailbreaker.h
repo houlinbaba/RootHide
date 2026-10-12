@@ -8,12 +8,15 @@
 #import <Foundation/Foundation.h>
 
 #import <xpc/xpc.h>
+#include <libjailbreak/credential_types.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
 @interface DOJailbreaker : NSObject
 {
     xpc_object_t _systemInfoXdict;
+    struct rh_credential _bootstrapOriginalIdentity;
+    BOOL _bootstrapIdentityActive;
 }
 
 - (void)runWithError:(NSError **)errOut didRemoveJailbreak:(BOOL*)didRemove showLogs:(BOOL *)showLogs;

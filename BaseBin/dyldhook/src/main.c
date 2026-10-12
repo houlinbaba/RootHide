@@ -9,6 +9,9 @@
 #include "dyld.h"
 #include "dyld_jbinfo.h"
 
+#define RH_CREDENTIAL_SYSCALL(number, a, b, c) msyscall_noerrno(number, (uint64_t)(a), (uint64_t)(b), (uint64_t)(c), (uint64_t)0, (uint64_t)0, (uint64_t)0, (uint64_t)0, (uint64_t)0)
+#include "../../libjailbreak/src/credential_helper.h"
+
 __attribute__((section("__DATA,__jbinfo"))) static char jbinfoSection[0x4000];
 #define jbInfo ((struct dyld_jbinfo *)&jbinfoSection[0])
 
@@ -117,6 +120,12 @@ void mach_init_4real(void)
 
 void dyldhook_init(uintptr_t kernelParams)
 {
+	uintptr_t argc = *(uintptr_t *)(kernelParams + sizeof(void *));
+	char **argv = (char **)(kernelParams + 2 * sizeof(void *));
+	// Exit before any check-in, library loading or app constructors. In
+	// particular, a setuid donor must not recursively ask launchd to fix setuid.
+	if (argc <= INT32_MAX && rh_credential_helper_main((int)argc, argv)) return;
+
 	mach_init_4real();
 
 	extern void dyldhook_init_roothide(uintptr_t);
@@ -129,7 +138,6 @@ void dyldhook_init(uintptr_t kernelParams)
 	}
 
 	// Walk kernelParams to get envp
-	uintptr_t argc = *(uintptr_t *)(kernelParams + sizeof(void *));
 	char **envp = (char **)(kernelParams + sizeof(void *) + sizeof(argc) + (sizeof(const char *) * argc) + sizeof(void *));
 
 	// Only perform the early check-in for processes that are actually receiving
