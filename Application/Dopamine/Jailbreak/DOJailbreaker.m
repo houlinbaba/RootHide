@@ -38,6 +38,7 @@
 #import <choma/MachO.h>
 #import <errno.h>
 #import <string.h>
+#import <sys/wait.h>
 #import <CoreServices/LSApplicationProxy.h>
 #import <sys/utsname.h>
 #import "spawn.h"
@@ -93,6 +94,18 @@ static void logSpawnImageDiagnostics(const char *path)
     });
     fat_free(fat);
     fflush(stdout);
+}
+
+static int waitForLaunchdStash(pid_t pid, int *status)
+{
+    while (true) {
+        if (waitpid(pid, status, 0) == -1) {
+            int waitError = errno;
+            if (waitError == EINTR) continue;
+            return waitError;
+        }
+        if (WIFEXITED(*status) || WIFSIGNALED(*status)) return 0;
+    }
 }
 
 typedef NS_ENUM(NSInteger, JBErrorCode) {
@@ -397,13 +410,26 @@ sets[idx] = NULL;
 {
     if (@available(iOS 16.0, *)) {
         uint64_t developerModeStorage = 0;
+        const char *storageSource = "unavailable";
         if (ksymbol(developer_mode_enabled)) {
             developerModeStorage = kread64(ksymbol(developer_mode_enabled));
+            storageSource = "kernel";
         }
         else if (ksymbol_txm(txm_developer_mode_storage)) {
             developerModeStorage = ksymbol_txm(txm_developer_mode_storage);
+            storageSource = "txm";
         }
-        if (developerModeStorage) kwrite8(developerModeStorage, 1);
+        if (developerModeStorage) {
+            uint8_t before = 0, after = 0;
+            int beforeResult = kreadbuf(developerModeStorage, &before, sizeof(before));
+            int writeResult = kwrite8(developerModeStorage, 1);
+            int afterResult = kreadbuf(developerModeStorage, &after, sizeof(after));
+            roothide_stage_log("developer_mode.enable source=%s before_read=%d before=%u write=%d after_read=%d after=%u",
+                               storageSource, beforeResult, (unsigned)before, writeResult, afterResult, (unsigned)after);
+        }
+        else {
+            roothide_stage_log("developer_mode.enable source=%s storage_resolved=0", storageSource);
+        }
     }
     return nil;
 }
@@ -434,83 +460,143 @@ sets[idx] = NULL;
 /************************ roothide specific ******************/
 
 
-struct boomerang_info {
-    mach_port_t serverPort;
-    dispatch_semaphore_t boomerangDone;
-};
-
-void *boomerang_server(struct boomerang_info *info)
-{
-    while (true) {
-        xpc_object_t xdict = nil;
-        if (!xpc_pipe_receive(info->serverPort, &xdict)) {
-            if (jbserver_received_boomerang_xpc_message(&gBoomerangServer, xdict) == JBS_BOOMERANG_DONE) {
-                dispatch_semaphore_signal(info->boomerangDone);
-                break;
-            }
-        }
-    }
-    return NULL;
-}
-
 - (NSError *)injectLaunchdHook
 {
+    roothide_stage_log("injection.begin uid=%u euid=%u gid=%u egid=%u root=%s",
+                       (unsigned)getuid(), (unsigned)geteuid(), (unsigned)getgid(), (unsigned)getegid(),
+                       jbinfo(rootPath) ?: "<unavailable>");
+    // The fresh-jailbreak caller has already elevated the App. The normal
+    // jbserver is not available yet, so do not ask it for temporary root here.
+    if (geteuid() != 0) {
+        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : @"launchd injection requires the bootstrap root identity"}];
+    }
+
     // Host a boomerang server that will be used by launchdhook to get the jailbreak primitives from this app
     mach_port_t serverPort = MACH_PORT_NULL;
-    mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &serverPort);
-    mach_port_insert_right(mach_task_self(), serverPort, serverPort, MACH_MSG_TYPE_MAKE_SEND);
-    
-    struct boomerang_info info;
-    info.serverPort = serverPort;
-    info.boomerangDone = dispatch_semaphore_create(0);
-    
-    pthread_t boomerangThread;
-    pthread_create(&boomerangThread, NULL, (void *(*)(void *))boomerang_server, &info);
-    pthread_detach(boomerangThread);
+    kern_return_t portResult = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &serverPort);
+    roothide_stage_log("injection.port.allocate result=%d", portResult);
+    if (portResult != KERN_SUCCESS) {
+        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"Allocating launchd handoff port failed: %d", portResult]}];
+    }
+    portResult = mach_port_insert_right(mach_task_self(), serverPort, serverPort, MACH_MSG_TYPE_MAKE_SEND);
+    roothide_stage_log("injection.port.insert result=%d", portResult);
+    if (portResult != KERN_SUCCESS) {
+        mach_port_destroy(mach_task_self(), serverPort);
+        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"Inserting launchd handoff send right failed: %d", portResult]}];
+    }
 
-    // Stash port to server in launchd's initPorts[2]
-    // Since we don't have the neccessary entitlements, we need to do it over jbctl
-    posix_spawnattr_t attr;
-    int attrError = posix_spawnattr_init(&attr);
-    if (attrError != 0) {
-        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"Initializing spawn attributes failed with error code %d", attrError]}];
+    dispatch_semaphore_t boomerangDone = dispatch_semaphore_create(0);
+    dispatch_semaphore_t serverStopped = dispatch_semaphore_create(0);
+    dispatch_queue_t serverQueue = dispatch_queue_create("com.roothide.launchd-handoff", DISPATCH_QUEUE_SERIAL);
+    if (!boomerangDone || !serverStopped || !serverQueue) {
+        mach_port_destroy(mach_task_self(), serverPort);
+        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : @"Allocating launchd handoff server state failed"}];
     }
-    posix_spawnattr_set_registered_ports_np(&attr, (mach_port_t[]){MACH_PORT_NULL, MACH_PORT_NULL, serverPort}, 3);
-    pid_t spawnedPid = 0;
-    const char *jbctlPath = JBROOT_PATH("/basebin/jbctl");
-    int spawnError = posix_spawn(&spawnedPid, jbctlPath, NULL, &attr, (char *const *)(const char *[]){ jbctlPath, "internal", "launchd_stash_port", NULL }, NULL);
-    posix_spawnattr_destroy(&attr);
-    if (spawnError != 0) {
-        printf("[jbctl-spawn] error=%d (%s)\n", spawnError, strerror(spawnError));
-        logSpawnImageDiagnostics(jbctlPath);
-        logSpawnImageDiagnostics(JBROOT_PATH("/basebin/libjailbreak.dylib"));
-        logSpawnImageDiagnostics(JBROOT_PATH("/basebin/libchoma.dylib"));
-        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"Spawning jbctl failed with error code %d (%s)", spawnError, strerror(spawnError)]}];
+    dispatch_source_t serverSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_MACH_RECV, (uintptr_t)serverPort, 0, serverQueue);
+    if (!serverSource) {
+        mach_port_destroy(mach_task_self(), serverPort);
+        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : @"Creating launchd handoff server failed"}];
     }
-    int status = 0;
-    do {
-        if (waitpid(spawnedPid, &status, 0) == -1) {
-            return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : @"Waiting for jbctl failed"}];;
+    // Blocks retain their state instead of borrowing a caller's stack. Cancel
+    // on every exit and wait for in-flight primitive access before cleanup.
+    __block BOOL handoffComplete = NO;
+    dispatch_source_set_event_handler(serverSource, ^{
+        if (handoffComplete) return;
+        xpc_object_t xdict = nil;
+        int receiveResult = xpc_pipe_receive(serverPort, &xdict);
+        roothide_stage_log("injection.handoff.receive result=%d", receiveResult);
+        if (receiveResult == 0 && xdict) {
+            int replyResult = jbserver_received_boomerang_xpc_message(&gBoomerangServer, xdict);
+            roothide_stage_log("injection.handoff.reply result=%d", replyResult);
+            if (replyResult == JBS_BOOMERANG_DONE) {
+                handoffComplete = YES;
+                dispatch_semaphore_signal(boomerangDone);
+            }
         }
-    } while (!WIFEXITED(status) && !WIFSIGNALED(status));
+    });
+    dispatch_source_set_cancel_handler(serverSource, ^{
+        // Destroy the receive and send rights only after the last handler.
+        kern_return_t destroyResult = mach_port_destroy(mach_task_self(), serverPort);
+        roothide_stage_log("injection.port.destroy result=%d", destroyResult);
+        dispatch_semaphore_signal(serverStopped);
+    });
+    dispatch_resume(serverSource);
 
-    // Inject launchdhook.dylib into launchd via opainject
-    printf("[launchdhook-build] launchd-availability-v3\n");
-    int r = exec_cmd(JBROOT_PATH("/basebin/opainject"), "1", JBROOT_PATH("/basebin/launchdhook.dylib"), NULL);
-    if (r != 0) {
-        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"opainject failed with error code %d", r]}];
+    @try {
+
+        // Stash port to server in launchd's initPorts[2]
+        // Since we don't have the necessary entitlements, we need to do it over jbctl
+        posix_spawnattr_t attr;
+        int attrError = posix_spawnattr_init(&attr);
+        roothide_stage_log("injection.jbctl.attr_init result=%d", attrError);
+        if (attrError != 0) {
+            return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"Initializing spawn attributes failed with error code %d", attrError]}];
+        }
+        int registeredPortsError = posix_spawnattr_set_registered_ports_np(&attr, (mach_port_t[]){MACH_PORT_NULL, MACH_PORT_NULL, serverPort}, 3);
+        roothide_stage_log("injection.jbctl.register_ports result=%d", registeredPortsError);
+        if (registeredPortsError != 0) {
+            posix_spawnattr_destroy(&attr);
+            return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"Registering jbctl ports failed with error code %d", registeredPortsError]}];
+        }
+        pid_t spawnedPid = 0;
+        const char *jbctlPath = JBROOT_PATH("/basebin/jbctl");
+        roothide_stage_log("injection.jbctl.spawn.begin uid=%u euid=%u", (unsigned)getuid(), (unsigned)geteuid());
+        int spawnError = posix_spawn(&spawnedPid, jbctlPath, NULL, &attr, (char *const *)(const char *[]){ jbctlPath, "internal", "launchd_stash_port", NULL }, NULL);
+        roothide_stage_log("injection.jbctl.spawn.end result=%d pid=%d", spawnError, spawnedPid);
+        posix_spawnattr_destroy(&attr);
+        if (spawnError != 0) {
+            printf("[jbctl-spawn] error=%d (%s)\n", spawnError, strerror(spawnError));
+            logSpawnImageDiagnostics(jbctlPath);
+            logSpawnImageDiagnostics(JBROOT_PATH("/basebin/libjailbreak.dylib"));
+            logSpawnImageDiagnostics(JBROOT_PATH("/basebin/libchoma.dylib"));
+            return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"Spawning jbctl failed with error code %d (%s)", spawnError, strerror(spawnError)]}];
+        }
+        int status = 0;
+        int waitError = waitForLaunchdStash(spawnedPid, &status);
+        if (waitError != 0) {
+            roothide_stage_log("injection.jbctl.wait.failed pid=%d errno=%d", spawnedPid, waitError);
+            return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"Waiting for jbctl failed: %d (%s)", waitError, strerror(waitError)]}];
+        }
+
+        if (WIFSIGNALED(status)) {
+            int signal = WTERMSIG(status);
+            roothide_stage_log("injection.jbctl.wait.end pid=%d raw_status=%d signal=%d", spawnedPid, status, signal);
+            return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"jbctl terminated by signal %d", signal]}];
+        }
+        int jbctlExitStatus = WEXITSTATUS(status);
+        roothide_stage_log("injection.jbctl.wait.end pid=%d raw_status=%d exit=%d", spawnedPid, status, jbctlExitStatus);
+        if (jbctlExitStatus != 0) {
+            printf("[jbctl-spawn] exit=%d\n", jbctlExitStatus);
+            return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"jbctl launchd port handoff failed with exit code %d", jbctlExitStatus]}];
+        }
+
+        // Inject launchdhook.dylib into launchd via opainject
+        printf("[launchdhook-build] launchd-availability-v3\n");
+        roothide_stage_log("injection.opainject.begin");
+        int r = exec_cmd(JBROOT_PATH("/basebin/opainject"), "1", JBROOT_PATH("/basebin/launchdhook.dylib"), NULL);
+        roothide_stage_log("injection.opainject.end result=%d", r);
+        if (r != 0) {
+            return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"opainject failed with error code %d", r]}];
+        }
+
+        // A broken launchd handoff must return an error instead of leaving the UI
+        // blocked forever after opainject has already exited.
+        dispatch_time_t handoffDeadline = dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC);
+        roothide_stage_log("injection.handoff.wait.begin");
+        if (dispatch_semaphore_wait(boomerangDone, handoffDeadline) != 0) {
+            roothide_stage_log("injection.handoff.wait.timeout");
+            return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : @"Timed out waiting for launchd primitive handoff"}];
+        }
+        roothide_stage_log("injection.handoff.wait.end");
+
+        return nil;
     }
-
-    // A broken launchd handoff must return an error instead of leaving the UI
-    // blocked forever after opainject has already exited.
-    dispatch_time_t handoffDeadline = dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC);
-    if (dispatch_semaphore_wait(info.boomerangDone, handoffDeadline) != 0) {
-        mach_port_deallocate(mach_task_self(), serverPort);
-        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedLaunchdInjection userInfo:@{NSLocalizedDescriptionKey : @"Timed out waiting for launchd primitive handoff"}];
+    @finally {
+        roothide_stage_log("injection.server.stop.begin");
+        dispatch_source_cancel(serverSource);
+        dispatch_semaphore_wait(serverStopped, DISPATCH_TIME_FOREVER);
+        roothide_stage_log("injection.server.stop.end");
     }
-    mach_port_deallocate(mach_task_self(), serverPort);
-
-    return nil;
 }
 
 /*
@@ -634,6 +720,8 @@ void *boomerang_server(struct boomerang_info *info)
         char executable[PROC_PIDPATHINFO_MAXSIZE];
         int r = proc_pidpath(getpid(), executable, sizeof(executable)) > 0 ?
             proc_credential_set(proc_self(), executable, &_bootstrapOriginalIdentity) : ESRCH;
+        roothide_stage_log("bootstrap.credential_restore.end result=%d uid=%u euid=%u gid=%u egid=%u",
+                           r, (unsigned)getuid(), (unsigned)geteuid(), (unsigned)getgid(), (unsigned)getegid());
         if (r) {
             // Several failure callers ignore cleanup's NSError. Do not let
             // those callers return to UIKit with the bootstrap root identity.
@@ -647,6 +735,34 @@ void *boomerang_server(struct boomerang_info *info)
 }
 
 - (void)runWithError:(NSError **)errOut didRemoveJailbreak:(BOOL*)didRemove showLogs:(BOOL *)showLogs
+{
+    // Capture the mobile container path before elevation changes HOME. Append
+    // a distinct attempt so a pre-activation failure cannot leave only old
+    // userspace-reboot entries in the exported diagnostics.
+    int logResult = roothide_stage_begin([[DOUIManager sharedInstance] rootHideStageLogPath].fileSystemRepresentation, true);
+    struct utsname machine = {0};
+    uname(&machine);
+    const char *commit = "release";
+#ifdef NIGHTLY
+    commit = COMMIT_HASH;
+#endif
+    roothide_stage_log("jailbreak.begin log_open_result=%d build=%s model=%s os=%s uid=%u euid=%u",
+                       logResult, commit, machine.machine, NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String,
+                       (unsigned)getuid(), (unsigned)geteuid());
+    *errOut = nil;
+    *didRemove = NO;
+    @try {
+        [self runStagesWithError:errOut didRemoveJailbreak:didRemove showLogs:showLogs];
+    }
+    @finally {
+        roothide_stage_log("jailbreak.end error=%s removed=%d uid=%u euid=%u",
+                           *errOut ? (*errOut).description.UTF8String : "none", *didRemove,
+                           (unsigned)getuid(), (unsigned)geteuid());
+        roothide_stage_end();
+    }
+}
+
+- (void)runStagesWithError:(NSError **)errOut didRemoveJailbreak:(BOOL*)didRemove showLogs:(BOOL *)showLogs
 {
 
 /****************** roothide specific ****************/
@@ -669,9 +785,13 @@ void *boomerang_server(struct boomerang_info *info)
     NSString *startLog = [NSString stringWithFormat:@"Starting Jailbreak (Model: %s, %@, Configuration: {removeJailbreak=%d, tweakInjection=%d, idownload=%d, appJIT=%d})", systemInfo.machine, NSProcessInfo.processInfo.operatingSystemVersionString, removeJailbreakEnabled, tweaksEnabled, idownloadEnabled, appJITEnabled];
     [[DOUIManager sharedInstance] sendLog:startLog debug:YES];
     
+    roothide_stage_log("jailbreak.system_info.begin");
     *errOut = [self gatherSystemInformation];
+    roothide_stage_log("jailbreak.system_info.end error=%s", *errOut ? (*errOut).description.UTF8String : "none");
     if (*errOut) return;
+    roothide_stage_log("jailbreak.exploitation.begin");
     *errOut = [self doExploitation];
+    roothide_stage_log("jailbreak.exploitation.end error=%s", *errOut ? (*errOut).description.UTF8String : "none");
     if (*errOut) {
         // We don't care about the return value of cleanup at this point, we just need to prevent a panic on exit
         [self cleanUpExploits];
@@ -689,7 +809,9 @@ void *boomerang_server(struct boomerang_info *info)
     
     
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Building Phys R/W Primitive") debug:NO];
+    roothide_stage_log("jailbreak.physrw.begin");
     *errOut = [self buildPhysRWPrimitive];
+    roothide_stage_log("jailbreak.physrw.end error=%s", *errOut ? (*errOut).description.UTF8String : "none");
     if (*errOut) {
         [self cleanUpExploits];
         return;
@@ -711,7 +833,11 @@ void *boomerang_server(struct boomerang_info *info)
     if (removeJailbreakEnabled) [[DOPreferenceManager sharedManager] setPreferenceValue:@NO forKey:@"removeJailbreakEnabled"];
 
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Elevating Privileges") debug:NO];
+    roothide_stage_log("jailbreak.privilege.begin");
     *errOut = [self elevatePrivileges];
+    roothide_stage_log("jailbreak.privilege.end error=%s uid=%u euid=%u gid=%u egid=%u",
+                       *errOut ? (*errOut).description.UTF8String : "none",
+                       (unsigned)getuid(), (unsigned)geteuid(), (unsigned)getgid(), (unsigned)getegid());
     if (*errOut) {
         [self cleanUpPostExploitation];
         return;
@@ -742,7 +868,9 @@ void *boomerang_server(struct boomerang_info *info)
         return;
     }
     
+    roothide_stage_log("jailbreak.bootstrap.begin");
     *errOut = [[DOEnvironmentManager sharedManager] prepareBootstrap];
+    roothide_stage_log("jailbreak.bootstrap.end error=%s root=%s", *errOut ? (*errOut).description.UTF8String : "none", jbinfo(rootPath) ?: "<unavailable>");
     if (*errOut) {
         [self cleanUpPostExploitation];
         return;
@@ -762,7 +890,9 @@ void *boomerang_server(struct boomerang_info *info)
     }
     
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Loading BaseBin TrustCache") debug:NO];
+    roothide_stage_log("jailbreak.basebin_trustcache.begin");
     *errOut = [self loadBasebinTrustcache];
+    roothide_stage_log("jailbreak.basebin_trustcache.end error=%s", *errOut ? (*errOut).description.UTF8String : "none");
     if (*errOut) {
         [self cleanUpPostExploitation];
         return;
@@ -770,6 +900,7 @@ void *boomerang_server(struct boomerang_info *info)
 
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Initializing Environment") debug:NO];
     *errOut = [self injectLaunchdHook];
+    roothide_stage_log("injection.end error=%s", *errOut ? (*errOut).description.UTF8String : "none");
     if (*errOut) {
         [self cleanUpPostExploitation];
         return;
@@ -795,8 +926,7 @@ void *boomerang_server(struct boomerang_info *info)
 
 /*************************** roothide specific *******************/
 [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"RootHide Stage") debug:NO];
-int logResult = roothide_stage_begin([[DOUIManager sharedInstance] rootHideStageLogPath].fileSystemRepresentation, false);
-roothide_stage_log("activation.begin log_open_result=%d os=%s dyld_patch_enabled=%d", logResult,
+roothide_stage_log("activation.begin os=%s dyld_patch_enabled=%d",
     NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String, gSystemInfo.jailbreakInfo.dyld_patch_enabled);
 
 int ret = basebin_generate(false);

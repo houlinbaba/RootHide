@@ -125,6 +125,12 @@ def main():
     assert 'run: python3 .github/scripts/test_roothide_stage_log.py' in workflow
     jailbreaker = (ROOT / 'Application/Dopamine/Jailbreak/DOJailbreaker.m').read_text(encoding='utf-8')
     assert jailbreaker.index('int logResult = roothide_stage_begin') < jailbreaker.index('int ret = basebin_generate(false)')
+    wrapper = jailbreaker.split('- (void)runWithError:', 1)[1].split('- (void)runStagesWithError:', 1)[0]
+    assert 'roothide_stage_begin' in wrapper and 'fileSystemRepresentation, true)' in wrapper
+    assert wrapper.index('roothide_stage_begin') < wrapper.index('[self runStagesWithError:')
+    assert '@finally' in wrapper and 'roothide_stage_end()' in wrapper
+    stages = jailbreaker.split('- (void)runStagesWithError:', 1)[1].split('- (void)finalize', 1)[0]
+    assert 'roothide_stage_begin' not in stages  # Activation must not truncate the earlier failure evidence.
     ui = (ROOT / 'Application/Dopamine/UI/Settings/DOSettingsController.m').read_text(encoding='utf-8')
     assert 'shareRootHideStageLogPressed' in ui
     environment = (ROOT / 'Application/Dopamine/Jailbreak/DOEnvironmentManager.m').read_text(encoding='utf-8')
