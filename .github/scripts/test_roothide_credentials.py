@@ -44,9 +44,15 @@ SPAWN_PREFIX = r'''
 typedef int pid_t;
 typedef short posix_spawnattr_t;
 struct _posix_spawn_args_desc { posix_spawnattr_t attrp; };
+#ifndef POSIX_SPAWN_START_SUSPENDED
 #define POSIX_SPAWN_START_SUSPENDED 128
-#define SIGCONT 18
+#endif
+#ifndef SIGCONT
+#define SIGCONT 19
+#endif
+#ifndef SIGKILL
 #define SIGKILL 9
+#endif
 static int spawn_calls, patch_calls, continue_calls, kill_calls, patch_error, spawn_error;
 static int versions, change_version;
 static const char *envbuf_getenv(char *const env[],const char *key) {
@@ -172,14 +178,30 @@ typedef unsigned uid_t;
 typedef int posix_spawnattr_t;
 typedef int posix_spawn_file_actions_t;
 typedef int pthread_mutex_t;
+// The fake mutex is an integer regardless of the native pthread ABI.
+#undef PTHREAD_MUTEX_INITIALIZER
 #define PTHREAD_MUTEX_INITIALIZER 0
+#ifndef WNOHANG
 #define WNOHANG 1
+#endif
+#ifndef F_DUPFD_CLOEXEC
 #define F_DUPFD_CLOEXEC 10
+#endif
+#ifndef POLLIN
 #define POLLIN 1
+#endif
+#ifndef SIGKILL
 #define SIGKILL 9
-#define SIGCONT 18
+#endif
+#ifndef SIGCONT
+#define SIGCONT 19
+#endif
+#ifndef POSIX_SPAWN_START_SUSPENDED
 #define POSIX_SPAWN_START_SUSPENDED 128
+#endif
+#ifndef CLOCK_MONOTONIC
 #define CLOCK_MONOTONIC 1
+#endif
 struct timespec { long tv_sec, tv_nsec; };
 struct pollfd { int fd; short events, revents; };
 typedef void (^kernel_map_accessor)(void *);
