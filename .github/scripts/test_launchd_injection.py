@@ -33,7 +33,6 @@ MOCKS = r'''
 static NSString *const JBErrorDomain = @"test";
 static int gBoomerangServer;
 #define JBS_BOOMERANG_DONE 9
-typedef id xpc_object_t;
 static int fail_allocate, fail_insert, fail_attr, fail_register, fail_spawn;
 static int fail_wait, interrupt_wait, child_status, injector_error, source_failure;
 static int receive_error, reply_result, event_mode, mobile;
@@ -103,7 +102,9 @@ static pid_t fake_wait(pid_t pid, int *status, int options) {
 }
 #define waitpid fake_wait
 static int xpc_pipe_receive(mach_port_t port, xpc_object_t *dict) {
-    assert(port == 42); *dict = receive_error ? nil : @"request"; return receive_error;
+    assert(port == 42);
+    *dict = receive_error ? nil : xpc_dictionary_create(NULL, NULL, 0);
+    return receive_error;
 }
 static int jbserver_received_boomerang_xpc_message(int *server, xpc_object_t dict) {
     assert(server == &gBoomerangServer && dict); ++replies;
@@ -179,7 +180,7 @@ SYNTAX_PREFIX = r'''
 typedef int BOOL;
 #define YES 1
 #define NO 0
-#define nil ((id)0)
+#define nil ((void *)0)
 #define NULL ((void *)0)
 #define true 1
 typedef unsigned long uintptr_t;
@@ -242,7 +243,9 @@ extern int posix_spawnattr_init(posix_spawnattr_t *), posix_spawnattr_destroy(po
 extern int posix_spawnattr_set_registered_ports_np(posix_spawnattr_t *, mach_port_t *, unsigned);
 extern int posix_spawn(pid_t *, const char *, const void *, const posix_spawnattr_t *, char *const *, char *const *);
 extern pid_t waitpid(pid_t, int *, int);
-typedef id xpc_object_t;
+@protocol OS_xpc_object @end
+typedef NSObject<OS_xpc_object> *xpc_object_t;
+extern xpc_object_t xpc_dictionary_create(const char *const *, const xpc_object_t *, unsigned long);
 extern int xpc_pipe_receive(mach_port_t, xpc_object_t *);
 extern int jbserver_received_boomerang_xpc_message(int *, xpc_object_t);
 extern int exec_cmd(const char *, ...);
@@ -334,6 +337,43 @@ def main():
                             '-fobjc-exceptions', '-DNIGHTLY=1', '-DCOMMIT_HASH="test-sha"', '-Wall', '-Wextra',
                             '-Werror', '-Wno-incomplete-implementation', '-fsyntax-only', str(obj)], check=True)
             print('PASS: extracted injection, early stage-log wrapper and Developer Mode Objective-C/ARC syntax (SDK stub, nightly define)', flush=True)
+            # Model the SDK's distinct XPC Objective-C type in the fixture too.
+            # Using id for this missed a typedef/NSString conflict in Apple CI.
+            fixture_prefix = SYNTAX_PREFIX
+            for declaration in (
+                'extern int xpc_pipe_receive(mach_port_t, xpc_object_t *);',
+                'extern int jbserver_received_boomerang_xpc_message(int *, xpc_object_t);',
+                'extern int exec_cmd(const char *, ...);',
+                'extern void roothide_stage_log(const char *, ...) __attribute__((format(printf, 1, 2)));',
+                'extern void logSpawnImageDiagnostics(const char *);',
+                'extern int gBoomerangServer;',
+                'extern NSString *const JBErrorDomain;',
+                '#define jbinfo(field) "/test"',
+            ):
+                fixture_prefix = fixture_prefix.replace(declaration, '')
+            interface_start = fixture_prefix.index('@interface DOJailbreaker : NSObject')
+            interface_end = fixture_prefix.index('@end', interface_start) + len('@end')
+            fixture_prefix = fixture_prefix[:interface_start] + fixture_prefix[interface_end:]
+            fixture_prefix = fixture_prefix.replace('@interface NSObject @end', '@interface NSObject\n+ (instancetype)new;\n@end')
+            fixture_prefix += '''
+#define DISPATCH_SOURCE_TYPE_DATA_ADD NULL
+#define EINVAL 22
+#define ENOENT 2
+#define ECHILD 10
+#define SIGKILL 9
+#define assert(x) ((void)sizeof(x))
+struct timespec { long tv_sec, tv_nsec; };
+extern int nanosleep(const struct timespec *, struct timespec *);
+extern int strcmp(const char *, const char *);
+extern void dispatch_source_merge_data(dispatch_source_t, unsigned long);
+extern int puts(const char *);
+'''
+            obj.write_text(fixture_prefix + MOCKS + wait + '\n@implementation DOJailbreaker\n' + method + '\n@end\n' + CASES,
+                           encoding='utf-8')
+            subprocess.run([str(args.zig), 'clang', '-cc1', '-triple', 'arm64-apple-ios17.0.0',
+                            '-x', 'objective-c', '-fobjc-runtime=ios-17.0.0', '-fobjc-arc', '-fblocks',
+                            '-fobjc-exceptions', '-Wall', '-Wextra', '-Werror', '-fsyntax-only', str(obj)], check=True)
+            print('PASS: Darwin fixture syntax with distinct SDK XPC object type (declarations only)', flush=True)
             harness = temp / 'wait.c'
             harness.write_text(WAIT_PREFIX + wait + WAIT_CASES, encoding='utf-8')
             binary = temp / 'wait.exe'
@@ -343,6 +383,7 @@ def main():
         elif sys.platform == 'darwin':
             harness = temp / 'test.m'
             harness.write_text('#import <Foundation/Foundation.h>\n#include <dispatch/dispatch.h>\n'
+                               '#include <xpc/xpc.h>\n'
                                '#include <mach/mach.h>\n#include <assert.h>\n#include <errno.h>\n#include <signal.h>\n'
                                '#include <stdbool.h>\n#include <stdio.h>\n'
                                '#include <spawn.h>\n#include <string.h>\n#include <sys/wait.h>\n'
