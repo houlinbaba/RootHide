@@ -58,6 +58,8 @@ extern char **environ;
 {
     self = [super init];
     if (self) {
+        _preparedUserspaceReboot = RH_USERSPACE_REBOOT_EMPTY;
+        _preparedUserspaceRebootLogFD = -1;
         _bootstrapNeedsMigration = NO;
         _bootstrapper = [[DOBootstrapper alloc] init];
         if ([self isJailbroken]) {
@@ -450,12 +452,25 @@ extern char **environ;
     requestInFlight = YES;
     NSString *logPath = [[DOUIManager sharedInstance] rootHideStageLogPath];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        struct rh_userspace_reboot prepared;
+        int preparedLogFD;
+        @synchronized(self) {
+            prepared = self->_preparedUserspaceReboot;
+            preparedLogFD = self->_preparedUserspaceRebootLogFD;
+            self->_preparedUserspaceReboot = RH_USERSPACE_REBOOT_EMPTY;
+            self->_preparedUserspaceRebootLogFD = -1;
+        }
         // Append on App relaunch so an incomplete activation is still visible.
-        int logResult = roothide_stage_begin(logPath.fileSystemRepresentation, true);
+        int logResult = 0;
+        if (preparedLogFD >= 0) roothide_stage_begin_from_fd(preparedLogFD);
+        else logResult = roothide_stage_begin(logPath.fileSystemRepresentation, true);
         roothide_stage_log("userspace_reboot.request log_open_result=%d", logResult);
         roothide_stage_log("userspace_reboot.spawn.begin uid=%d euid=%d gid=%d",
                            getuid(), geteuid(), getgid());
-        int result = [self spawnJbctlAsRootWithArgs:@[@"reboot_userspace"]];
+        // Initial certificate activation already prepared a root child. Do not
+        // request another root/unsandbox transition after restoring the App.
+        int result = prepared.pid > 0 ? rh_userspace_reboot_finish(&prepared) :
+                     [self spawnJbctlAsRootWithArgs:@[@"reboot_userspace"]];
         roothide_stage_log("userspace_reboot.spawn.end result=%d", result);
         roothide_stage_log("userspace_reboot.return result=%d", result);
         roothide_stage_end();
@@ -471,6 +486,24 @@ extern char **environ;
             }
         });
     });
+}
+
+- (int)prepareBootstrapUserspaceReboot
+{
+    @synchronized(self) {
+        int result = rh_userspace_reboot_prepare(&_preparedUserspaceReboot, JBROOT_PATH("/basebin/jbctl"), environ);
+        if (!result) _preparedUserspaceRebootLogFD = roothide_stage_duplicate_fd();
+        return result;
+    }
+}
+
+- (void)cancelPreparedUserspaceReboot
+{
+    @synchronized(self) {
+        rh_userspace_reboot_cancel(&_preparedUserspaceReboot);
+        if (_preparedUserspaceRebootLogFD >= 0) close(_preparedUserspaceRebootLogFD);
+        _preparedUserspaceRebootLogFD = -1;
+    }
 }
 
 - (void)refreshJailbreakApps

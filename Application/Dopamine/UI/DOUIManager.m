@@ -32,6 +32,7 @@
 {
     if (self = [super init]){
         _bootlogoPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/bootlogo.png"];
+        _rootHideStageLogPath = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/RootHideStage.log"];
         _preferenceManager = [DOPreferenceManager sharedManager];
         _logRecord = [NSMutableArray new];
         _logLock = [NSLock new];
@@ -252,7 +253,7 @@
 
 - (NSString *)rootHideStageLogPath
 {
-    return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/RootHideStage.log"];
+    return _rootHideStageLogPath;
 }
 
 - (void)shareRootHideStageLogFromView:(UIView *)sourceView

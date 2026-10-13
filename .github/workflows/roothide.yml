@@ -208,6 +208,9 @@ jobs:
       - name: RootHide persistent stage log regressions
         run: python3 .github/scripts/test_roothide_stage_log.py
 
+      - name: RootHide userspace reboot handoff regressions
+        run: python3 .github/scripts/test_userspace_reboot.py
+
       - name: RootHide launchd injection failure regressions
         run: python3 .github/scripts/test_launchd_injection.py
 

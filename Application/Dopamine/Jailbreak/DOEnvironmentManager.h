@@ -7,6 +7,7 @@
 
 #import <Foundation/Foundation.h>
 #import "DOBootstrapper.h"
+#include <libjailbreak/userspace_reboot.h>
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -26,6 +27,8 @@ typedef NS_ENUM(NSUInteger, DOPackageManagerHealthState) {
     DOBootstrapper *_bootstrapper;
     BOOL _isJailbroken;
     BOOL _bootstrapNeedsMigration;
+    struct rh_userspace_reboot _preparedUserspaceReboot;
+    int _preparedUserspaceRebootLogFD;
 }
 
 + (instancetype)sharedManager;
@@ -65,6 +68,8 @@ typedef NS_ENUM(NSUInteger, DOPackageManagerHealthState) {
 
 - (void)respring;
 - (void)rebootUserspace;
+- (int)prepareBootstrapUserspaceReboot;
+- (void)cancelPreparedUserspaceReboot;
 - (void)refreshJailbreakApps;
 - (NSError * _Nullable)repairJailbreakApps;
 - (void)reboot;

@@ -56,6 +56,27 @@ int roothide_stage_begin(const char *path, bool append)
     return result;
 }
 
+int roothide_stage_duplicate_fd(void)
+{
+    int savedErrno = errno;
+    pthread_mutex_lock(&gStageLock);
+    int fd = gStageFD >= 0 ? fcntl(gStageFD, F_DUPFD_CLOEXEC, 10) : -1;
+    pthread_mutex_unlock(&gStageLock);
+    errno = savedErrno;
+    return fd;
+}
+
+void roothide_stage_begin_from_fd(int fd)
+{
+    int savedErrno = errno;
+    pthread_mutex_lock(&gStageLock);
+    if (gStageFD >= 0 && gStageFD != fd) close(gStageFD);
+    gStageFD = fd;
+    gStageActive = true;
+    pthread_mutex_unlock(&gStageLock);
+    errno = savedErrno;
+}
+
 void roothide_stage_log(const char *format, ...)
 {
     int savedErrno = errno;

@@ -1,10 +1,14 @@
 #import <libjailbreak/libjailbreak.h>
 #import <libjailbreak/jbclient_xpc.h>
 #import <libjailbreak/jbclient_mach.h>
+#import <libjailbreak/userspace_reboot.h>
 #import "internal.h"
 
 #import <Foundation/Foundation.h>
 #import <CoreServices/LSApplicationProxy.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdlib.h>
 
 int reboot3(uint64_t flags, ...);
 #define RB2_USERREBOOT (0x2000000000000000llu)
@@ -55,10 +59,13 @@ int main(int argc, char* argv[])
 		if (!strcmp(argv[argc-2], "--waitfor")) {
 			// When the Dopamine app spawns jbctl it needs to clean up it's own ucred before jbctl does the requested action
 			// For this it will attach a pipe fd and write to it once the cleanup is done, so we need to wait until that write happens
-			int fd = atoi(argv[argc-1]);
-			char token = 0;
-			(void)read(fd, &token, sizeof(token));
+			char *end = NULL;
+			long parsedFD = strtol(argv[argc-1], &end, 10);
+			if (!*argv[argc-1] || *end || parsedFD < 0 || parsedFD > INT_MAX) return EINVAL;
+			int fd = (int)parsedFD;
+			int result = rh_userspace_reboot_wait(fd);
 			close(fd);
+			if (result) return result;
 		}
 	}
 
@@ -160,7 +167,8 @@ int main(int argc, char* argv[])
 		// Give the app a final scheduling window after releasing --waitfor
 		// before launchd starts tearing userspace down.
 		usleep(10000);
-		return reboot3(RB2_USERREBOOT);
+		int result = reboot3(RB2_USERREBOOT);
+		return result < 0 ? (errno ?: EIO) : result;
 	}
 	else if (!strcmp(cmd, "respring")) {
 		usleep(10000);

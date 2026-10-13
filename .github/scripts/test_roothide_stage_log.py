@@ -63,6 +63,8 @@ int main(int argc, char **argv) {
     read_log(path, buffer, sizeof(buffer));
     assert(strstr(buffer, "first result=7")); // Visible before close/normal exit.
     assert(!strstr(buffer, "bootstrap-event")); // Do not replace the active App log.
+    int retained = roothide_stage_duplicate_fd();
+    assert(retained >= 10 && (fcntl(retained, F_GETFD) & FD_CLOEXEC));
 
     pid_t pid = fork();
     assert(pid >= 0);
@@ -76,6 +78,20 @@ int main(int argc, char **argv) {
     roothide_stage_log("after-end");
     read_log(path, buffer, sizeof(buffer));
     assert(!strstr(buffer, "after-end"));
+    // Resume through the retained open file even if the path has moved. This
+    // represents the handoff after bootstrap restores App credentials.
+    char moved[4096];
+    snprintf(moved, sizeof(moved), "%s.moved", path);
+    assert(rename(path, moved) == 0);
+    errno = ERANGE;
+    roothide_stage_begin_from_fd(retained);
+    roothide_stage_log("post-restore-reboot");
+    assert(errno == ERANGE);
+    roothide_stage_end();
+    assert(fcntl(retained, F_GETFD) == -1 && errno == EBADF);
+    read_log(moved, buffer, sizeof(buffer));
+    assert(strstr(buffer, "post-restore-reboot"));
+    assert(rename(moved, path) == 0);
 
     assert(roothide_stage_begin(path, true) == 0);
     roothide_stage_log("app-reopened");

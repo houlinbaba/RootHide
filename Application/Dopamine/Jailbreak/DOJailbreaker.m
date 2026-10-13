@@ -127,6 +127,7 @@ typedef NS_ENUM(NSInteger, JBErrorCode) {
     JBErrorCodeFailedDuplicateApps           = -14,
     JBErrorCodeFailedOffsetValidation        = -15,
     JBErrorCodeFailedDeveloperMode           = -16,
+    JBErrorCodeFailedPrepareUserspaceReboot  = -17,
 };
 
 @implementation DOJailbreaker
@@ -790,6 +791,7 @@ static int enableDeveloperMode(void)
         roothide_stage_log("bootstrap.credential_restore.end result=%d uid=%u euid=%u gid=%u egid=%u",
                            r, (unsigned)getuid(), (unsigned)geteuid(), (unsigned)getgid(), (unsigned)getegid());
         if (r) {
+            [[DOEnvironmentManager sharedManager] cancelPreparedUserspaceReboot];
             // Several failure callers ignore cleanup's NSError. Do not let
             // those callers return to UIKit with the bootstrap root identity.
             roothide_stage_file_log([[DOUIManager sharedInstance] rootHideStageLogPath].fileSystemRepresentation,
@@ -1055,6 +1057,19 @@ setenv("DYLD_INSERT_LIBRARIES", JBROOT_PATH("/basebin/systemhook.dylib"), 1);
     }
 */
 
+    // The certificate App regains its original sandbox at cleanup. Prepare
+    // the initial reboot under bootstrap root, but keep it gated until finalize.
+    if (@available(iOS 17.0, *)) {
+        if (![[DOEnvironmentManager sharedManager] isInstalledThroughTrollStore]) {
+            int result = [[DOEnvironmentManager sharedManager] prepareBootstrapUserspaceReboot];
+            if (result) {
+                *errOut = [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedPrepareUserspaceReboot
+                                         userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to prepare userspace reboot: %d", result]}];
+                [self cleanUpPostExploitation];
+                return;
+            }
+        }
+    }
     roothide_stage_log("activation.cleanup.begin");
     *errOut = [self cleanUpPostExploitation];
     roothide_stage_log("activation.cleanup.end error=%s", *errOut ? (*errOut).description.UTF8String : "none");

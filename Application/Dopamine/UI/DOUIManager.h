@@ -18,6 +18,7 @@ NS_ASSUME_NONNULL_BEGIN
     NSDictionary *_fallbackLocalizations;
     NSLock *_logLock;
     BOOL _rootHideExportInProgress;
+    NSString *_rootHideStageLogPath;
 }
 
 @property (nonatomic, readonly) NSString *bootlogoPath;
