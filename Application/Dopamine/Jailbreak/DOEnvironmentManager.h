@@ -53,6 +53,7 @@ typedef NS_ENUM(NSUInteger, DOPackageManagerHealthState) {
 - (NSString *)accessibleKernelPath;
 - (NSString *)accessibleSPTMPath;
 - (NSString *)accessibleTXMPath;
+- (nullable NSDictionary<NSString *, NSString *> *)prepareKernelImagesWithError:(NSError * _Nullable * _Nullable)error;
 - (void)locateJailbreakRoot;
 - (NSError *)ensureJailbreakRootExists;
 
