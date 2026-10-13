@@ -49,6 +49,7 @@ DARWIN_CASES = r'''
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonDigest.h>
 #import <partial/partial.h>
+#import <libjailbreak/roothide_stage.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -226,7 +227,7 @@ struct NSRange { NSUInteger location,length; };
 extern int memcmp(const void *,const void *,size_t);
 extern unsigned char *CC_SHA384(const void *,CC_LONG,unsigned char *);
 extern unsigned char *CC_SHA1(const void *,CC_LONG,unsigned char *);
-extern void roothide_stage_log(const char *, ...) __attribute__((format(printf,1,2)));
+#import <libjailbreak/roothide_stage.h>
 @class NSString, NSData, NSError, NSDictionary, NSArray, NSCharacterSet, NSURL;
 @protocol NSFastEnumeration
 - (NSUInteger)countByEnumeratingWithState:(void *)state objects:(id *)objects count:(NSUInteger)count;
@@ -394,7 +395,11 @@ def extract(text, signature):
     raise ValueError(signature)
 
 def no_includes(text):
-    return '\n'.join(line for line in text.splitlines() if not line.startswith(('#import ', '#include ')))
+    # Keep stage declarations at their actual include sites so the fixture's
+    # mock definition cannot hide a late format attribute declaration.
+    return '\n'.join(line for line in text.splitlines()
+                     if line == '#import <libjailbreak/roothide_stage.h>'
+                     or not line.startswith(('#import ', '#include ')))
 
 def check_linked_api():
     # Check exports in the ranlib indexes, not just strings inside object code.
@@ -423,6 +428,8 @@ def main():
     context = nullcontext(str(args.workdir.resolve())) if args.workdir else tempfile.TemporaryDirectory(prefix='firmware-regression-')
     with context as directory:
         temp = Path(directory)
+        include = temp / 'libjailbreak'; include.mkdir(exist_ok=True)
+        (include/'roothide_stage.h').write_text('void roothide_stage_log(const char *, ...) __attribute__((format(printf,1,2)));\n', encoding='utf-8')
         harness = temp / 'validator.c'
         harness.write_text('#include <stdlib.h>\n' + C_CASES, encoding='utf-8')
         binary = temp / ('validator.exe' if args.zig else 'validator')
@@ -441,7 +448,7 @@ def main():
             syntax.write_text(text, encoding='utf-8')
             subprocess.run([str(args.zig), 'clang', '-cc1', '-triple', 'arm64-apple-ios17.0.0', '-x', 'objective-c',
                             '-fobjc-runtime=ios-17.0.0', '-fobjc-arc', '-fblocks', '-fobjc-exceptions', '-Wall', '-Wextra',
-                            '-Werror', '-Wno-nullability-completeness', '-fsyntax-only', str(syntax)], check=True)
+                            '-Werror', '-Wno-nullability-completeness', '-I', str(temp), '-fsyntax-only', str(syntax)], check=True)
             print('PASS: full firmware downloader Objective-C/ARC syntax (declarations only)')
             # Also check the entire Darwin fixture before adding it to Apple CI.
             headers = SYNTAX_PREFIX + INTEGRATION_PREFIX
@@ -449,11 +456,23 @@ def main():
             production = no_includes((SOURCE/'DOFirmwareValidation.h').read_text()) + '\n'
             production += no_includes((SOURCE/'DOFirmwareManager.h').read_text()) + '\n'
             production += no_includes((SOURCE/'DOFirmwareManager.m').read_text())
-            syntax.write_text(headers + no_includes(DARWIN_CASES.replace('PRODUCTION_SOURCE', production)), encoding='utf-8')
+            # Unlike the downloader/preflight checks, this fixture must obtain
+            # the attributed declaration from its own imports before the mock.
+            fixture_headers = headers.replace('#import <libjailbreak/roothide_stage.h>\n', '')
+            syntax.write_text(fixture_headers + no_includes(DARWIN_CASES.replace('PRODUCTION_SOURCE', production)), encoding='utf-8')
             check = [str(args.zig), 'clang', '-cc1', '-triple', 'arm64-apple-ios17.0.0', '-x', 'objective-c',
                      '-fobjc-runtime=ios-17.0.0', '-fobjc-arc', '-fblocks', '-fobjc-exceptions', '-Wall', '-Wextra',
-                     '-Werror', '-Wno-nullability-completeness', '-Wno-incomplete-implementation', '-fsyntax-only', str(syntax)]
+                     '-Werror', '-Wno-nullability-completeness', '-Wno-incomplete-implementation', '-I', str(temp), '-fsyntax-only', str(syntax)]
             subprocess.run(check, check=True)
+            # Reproduce the original CI failure by removing only the fixture's
+            # early import. The production source still imports the same header.
+            late = temp / 'late-stage-declaration.m'
+            broken_fixture = DARWIN_CASES.replace('#import <libjailbreak/roothide_stage.h>\n', '')
+            late.write_text(fixture_headers + no_includes(broken_fixture.replace('PRODUCTION_SOURCE', production)), encoding='utf-8')
+            result = subprocess.run(check[:-1] + [str(late)], capture_output=True, text=True)
+            if result.returncode == 0 or '-Wignored-attributes' not in result.stderr:
+                raise RuntimeError('Fixture check did not detect the late stage-log format attribute: ' + result.stderr)
+            print('PASS: fixture imports stage-log attributes before the mock; late declaration rejected under -Werror')
             environment = (SOURCE/'DOEnvironmentManager.m').read_text(encoding='utf-8')
             jailbreaker = (SOURCE/'DOJailbreaker.m').read_text(encoding='utf-8')
             preflight = extract(jailbreaker, '- (NSError *)gatherSystemInformation')
@@ -466,8 +485,6 @@ def main():
             subprocess.run(check, check=True)
             print('PASS: Darwin fixture, SPTM detection and jailbreak firmware preflight syntax (declarations only)')
         elif sys.platform == 'darwin':
-            include = temp / 'libjailbreak'; include.mkdir()
-            (include/'roothide_stage.h').write_text('void roothide_stage_log(const char *, ...) __attribute__((format(printf,1,2)));\n')
             harness = temp / 'firmware.m'
             production = '#include "' + (SOURCE/'DOFirmwareManager.m').as_posix() + '"'
             harness.write_text(DARWIN_CASES.replace('PRODUCTION_SOURCE',production), encoding='utf-8')
