@@ -244,7 +244,16 @@ def main():
     assert 'csops(' not in state
     assert unsandbox.index('@available(iOS 17.0') < unsandbox.index('return;') < unsandbox.index('jbclient_root_set_mac_label')
     client = (SOURCE / 'jbclient_xpc.c').read_text(encoding='utf-8')
-    functions = '\n'.join(extract(client, name) for name in ('int jbclient_process_checkin(', 'int jbclient_app_checkin('))
+    app_checkin = (SOURCE / 'app_checkin.c').read_text(encoding='utf-8')
+    # systemhook links jbclient_*.c without info.c. The App-only wrapper must
+    # stay in libjailbreak's full source set, not add a state dependency there.
+    assert 'jbinfo(' not in client and 'gSystemInfo' not in client
+    assert '#include "info.h"' not in client
+    assert 'int jbclient_app_checkin(' not in client
+    assert SOURCE / 'app_checkin.c' not in SOURCE.glob('jbclient_*.c')
+    assert 'src/*.c' in (ROOT / 'BaseBin/libjailbreak/Makefile').read_text(encoding='utf-8')
+    assert '../libjailbreak/src/jbclient_*.c' in (ROOT / 'BaseBin/systemhook/Makefile').read_text(encoding='utf-8')
+    functions = extract(client, 'int jbclient_process_checkin(') + '\n' + extract(app_checkin, 'int jbclient_app_checkin(')
     functions += '\n' + extract((SOURCE / 'jbclient_roothide.c').read_text(encoding='utf-8'), 'bool jbclient_roothide_jailbroken()')
     compiler = [str(args.zig.resolve()), 'cc'] if args.zig else ['clang']
     scratch = nullcontext(args.workdir.resolve()) if args.workdir else tempfile.TemporaryDirectory(prefix='app-checkin-')
