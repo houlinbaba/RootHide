@@ -16,6 +16,9 @@ char *jbclient_get_boot_uuid(void);
 int jbclient_trust_file(int fd, struct siginfo *siginfo, bool attach);
 int jbclient_trust_file_by_path(const char *path);
 int jbclient_process_checkin(char **rootPathOut, char **bootUUIDOut, char **sandboxExtensionsOut, bool *fullyDebuggedOut, bool *forceCSAdhocOut);
+// App fallback without dyldhook/systemhook: consume returned sandbox grants
+// and cache only the root confirmed by a successful check-in.
+int jbclient_app_checkin(void);
 int jbclient_fork_fix(uint64_t childPid);
 int jbclient_cs_revalidate(void);
 int jbclient_jbsettings_get(const char *key, xpc_object_t *valueOut);

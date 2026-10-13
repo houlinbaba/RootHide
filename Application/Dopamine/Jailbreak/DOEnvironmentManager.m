@@ -63,7 +63,10 @@ extern char **environ;
         _bootstrapNeedsMigration = NO;
         _bootstrapper = [[DOBootstrapper alloc] init];
         if ([self isJailbroken]) {
-            gSystemInfo.jailbreakInfo.rootPath = strdup(jbclient_get_jbroot() ?: "");
+            const char *rootPath = jbclient_get_jbroot();
+            if (!jbinfo(rootPath) && rootPath && rootPath[0] == '/') {
+                gSystemInfo.jailbreakInfo.rootPath = strdup(rootPath);
+            }
         }
         else if ([self isInstalledThroughTrollStore]) {
             [self locateJailbreakRoot];
@@ -182,9 +185,10 @@ extern char **environ;
         return NO;
 /************** roothide specific ********/
 
-    uint32_t csFlags = 0;
-    csops(getpid(), CS_OPS_STATUS, &csFlags, sizeof(csFlags));
-    _isJailbroken = (csFlags & CS_PLATFORM_BINARY) != 0;
+    // This describes the device's active RootHide session. A certificate
+    // App's own platform flag describes its privileges, not service state.
+    // Individual privileged actions still use the authenticated root RPC.
+    _isJailbroken = YES;
     return _isJailbroken;
 }
 
@@ -233,6 +237,13 @@ extern char **environ;
 
 - (void)runUnsandboxed:(void (^)(void))unsandboxBlock
 {
+    if (@available(iOS 17.0, *)) {
+        // Check-in supplies scoped bootstrap grants. Privileged operations
+        // run inside runAsRoot with the donor's immutable credential. Editing
+        // a live credential's hashed MAC label is unsafe on this kernel.
+        unsandboxBlock();
+        return;
+    }
     if ([self isInstalledThroughTrollStore]) {
         unsandboxBlock();
     }

@@ -140,12 +140,13 @@ bool jbclient_roothide_jailbroken()
 {
 	bool jailbroken = false;
 
-    xpc_object_t xargs = xpc_dictionary_create_empty();
-	xpc_object_t xreply = jbserver_xpc_send(JBS_DOMAIN_ROOTHIDE, JBS_ROOTHIDE_JAILBROKEN_CHECK, xargs);
-	xpc_release(xargs);
+	xpc_object_t xreply = jbserver_xpc_send(JBS_DOMAIN_ROOTHIDE, JBS_ROOTHIDE_JAILBROKEN_CHECK, NULL);
 	if (xreply) {
-		int64_t result = xpc_dictionary_get_int64(xreply, "result");
-		if(result == 0) {
+		xpc_object_t resultObject = xpc_dictionary_get_value(xreply, "result");
+		xpc_object_t stateObject = xpc_dictionary_get_value(xreply, "jailbroken");
+		if (resultObject && xpc_get_type(resultObject) == XPC_TYPE_INT64 &&
+		    xpc_dictionary_get_int64(xreply, "result") == 0 &&
+		    stateObject && xpc_get_type(stateObject) == XPC_TYPE_BOOL) {
 			jailbroken = xpc_dictionary_get_bool(xreply, "jailbroken");
 		}
 		xpc_release(xreply);
