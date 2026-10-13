@@ -172,6 +172,9 @@ jobs:
       - name: Systemhook startup diagnostics regressions
         run: python3 .github/scripts/test_systemhook_startup_diagnostics.py
 
+      - name: Userspace reboot primitive handoff regressions
+        run: python3 .github/scripts/test_boomerang_handoff.py
+
       - name: RootHide jbserver malformed XPC regressions
         run: python3 .github/scripts/test_jbserver_runtime.py
 

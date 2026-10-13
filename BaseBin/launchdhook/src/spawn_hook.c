@@ -1,4 +1,5 @@
 #include <spawn.h>
+#include <errno.h>
 #include "../systemhook/src/common.h"
 #include "boomerang.h"
 #include "crashreporter.h"
@@ -96,6 +97,7 @@ int __posix_spawn_hook(pid_t *restrict pid, const char *restrict path,
 
 			// We are back in "early boot" for the remainder of this launchd instance
 			// Mainly so we don't lock up while spawning boomerang
+			bool wasInEarlyBoot = gInEarlyBoot;
 			gInEarlyBoot = true;
 
 			// If the jailbreak is currently hidden, fakelib is not mounted
@@ -109,7 +111,12 @@ int __posix_spawn_hook(pid_t *restrict pid, const char *restrict path,
 #endif
 
 			// Before the userspace reboot, we want to stash the primitives into boomerang
-			boomerang_stashPrimitives();
+			int handoffResult = boomerang_stashPrimitives();
+			if (handoffResult != 0) {
+				gInEarlyBoot = wasInEarlyBoot;
+				JBLogError("Failed to stash userspace reboot primitives: %d", handoffResult);
+				return handoffResult;
+			}
 
 			// Fix Xcode debugging being broken after the userspace reboot
 			if (__builtin_available(iOS 17.0, *)) {

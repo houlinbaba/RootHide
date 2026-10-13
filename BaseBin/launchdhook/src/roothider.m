@@ -425,7 +425,10 @@ int roothide_launchd___posix_spawn_prehook(pid_t *restrict pidp, const char *res
 		short flags = 0;
 		posix_spawnattr_getflags(attrp, &flags);
 		posix_spawnattr_setflags(attrp, flags | POSIX_SPAWN_START_SUSPENDED);
-		return __posix_spawn_hook(pidp, path, desc, argv, envp);
+		int result = __posix_spawn_hook(pidp, path, desc, argv, envp);
+		// SETEXEC normally never returns. Restore reusable attributes on failure.
+		posix_spawnattr_setflags(attrp, flags);
+		return result;
 	}
 
 	if (is_dopamine_app(path))
