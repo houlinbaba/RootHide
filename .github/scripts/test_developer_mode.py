@@ -155,7 +155,15 @@ int main(void) {
         handoff(); assert(!jbinfo(preserveDeveloperMode) && shouldHideDeveloperMode());
         hideDeveloperMode();
         assert(mode_storage == 1 && raw_status() == 0); // reproduces reported gate
-        assert(enableDeveloperMode() != 0); // byte alone must not pass validation
+        assert(enableDeveloperMode() == 0); // TrollStore permits the hidden query
+        jbinfo(preserveDeveloperMode) = true;
+        assert(enableDeveloperMode() != 0); // certificate launch still needs raw status
+
+        // Device feedback: A16/17.0, TrollStore, TXM before=after=1, raw=0.
+        // Do not require an OID swap to reproduce this observed combination.
+        reset(txm); mode_storage = 1; query_value = 0;
+        assert(enableDeveloperMode() == 0 && writes == 0 && queries == 1);
+        assert(reads == 2 && !jbinfo(preserveDeveloperMode));
 
         reset(txm); fail_read = 1;
         assert(enableDeveloperMode() != 0 && writes == 0 && queries == 0);
@@ -165,12 +173,19 @@ int main(void) {
         assert(enableDeveloperMode() != 0 && mode_storage == 0 && queries == 0);
         reset(txm); fail_read = 2;
         assert(enableDeveloperMode() != 0 && queries == 0);
-        reset(txm); query_errno = ENOENT;
-        assert(enableDeveloperMode() != 0 && queries == 1);
-        reset(txm); query_size = 1;
-        assert(enableDeveloperMode() != 0);
-        reset(txm); query_value = 0;
-        assert(enableDeveloperMode() != 0);
+        // Raw status is a launch prerequisite for certificate installs and
+        // diagnostic-only for TrollStore. Byte/write failures above stay fatal.
+        for (int certificate = 0; certificate < 2; ++certificate) {
+            reset(txm); jbinfo(preserveDeveloperMode) = certificate;
+            query_errno = ENOENT;
+            assert((enableDeveloperMode() != 0) == (bool)certificate && queries == 1);
+            reset(txm); jbinfo(preserveDeveloperMode) = certificate;
+            query_size = 1;
+            assert((enableDeveloperMode() != 0) == (bool)certificate);
+            reset(txm); jbinfo(preserveDeveloperMode) = certificate;
+            query_value = 0;
+            assert((enableDeveloperMode() != 0) == (bool)certificate);
+        }
         reset(txm); mode_storage = 1; fail_write = 1;
         assert(enableDeveloperMode() == 0 && writes == 0 && queries == 1);
     }
@@ -182,7 +197,7 @@ int main(void) {
     assert(enableDeveloperMode() == ENOENT && writes == 0);
     reset(false); ios16_or_newer = false;
     assert(!shouldHideDeveloperMode());
-    puts("PASS: raw OID regression, certificate/TrollStore handoff, kernel/TXM write and status failure gates");
+    puts("PASS: TrollStore byte=1/raw=0 feedback, certificate launch gates, OID/handoff policy, kernel/TXM failures");
     return 0;
 }
 '''

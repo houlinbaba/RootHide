@@ -438,8 +438,9 @@ sets[idx] = NULL;
     return nil;
 }
 
-// Read the kernel/TXM byte and the unhooked sysctl independently. The latter
-// is the status uninjected launch services use for certificate-installed apps.
+// Read the kernel/TXM byte and the unhooked sysctl independently. Only
+// certificate installs require the latter for uninjected launch services;
+// TrollStore can run with the raw status hidden by the RootHide OID policy.
 static int enableDeveloperMode(void)
 {
     uint64_t developerModeStorage = 0;
@@ -481,7 +482,7 @@ static int enableDeveloperMode(void)
     int queryError = result == 0 ? 0 : errno;
     roothide_stage_log("developer_mode.status result=%d errno=%d size=%zu enabled=%d preserve=%d",
                        result, queryError, size, enabled, jbinfo(preserveDeveloperMode));
-    if (result != 0 || size != sizeof(enabled) || enabled != 1) return EIO;
+    if (jbinfo(preserveDeveloperMode) && (result != 0 || size != sizeof(enabled) || enabled != 1)) return EIO;
     return 0;
 }
 
