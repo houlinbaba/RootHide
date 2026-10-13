@@ -217,8 +217,11 @@ jobs:
       - name: Certificate Developer Mode launch regressions
         run: python3 .github/scripts/test_developer_mode.py
 
-        - name: Certificate App check-in and active session regressions
-          run: python3 .github/scripts/test_app_checkin.py
+      - name: Certificate App check-in and active session regressions
+        run: python3 .github/scripts/test_app_checkin.py
+
+      - name: RootHide dyld entry guard regressions
+        run: python3 .github/scripts/test_dyld_entry_redirect.py
 
       - name: Certificate firmware acquisition regressions
         run: python3 .github/scripts/test_firmware_images.py

@@ -9,6 +9,7 @@
 #include <CoreSymbolication.h>
 
 #include "../libjailbreak.h"
+#include "../roothide_stage.h"
 #include "common.h"
 #include "log.h"
 
@@ -710,7 +711,7 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
         kr = thread_get_state(allThreads[i], ARM_THREAD_STATE64, (thread_state_t)&threadState, &threadStateCount);
         if(kr != KERN_SUCCESS) {
             JBLogError("thread_get_state %d,%s", kr, mach_error_string(kr));
-            goto failed;
+            goto reentry_end;
         }
 
         arm_thread_state64_t strippedState = threadState; /* some process such as WebContent used a different pac key
@@ -726,6 +727,27 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
         if(strippedPC == dyld_entry)
         {
             JBLogDebug("dyld entrypoint found in thread[%d]:%x", i, allThreads[i]);
+
+            // iOS 17 rejects core register writes from platform callers without
+            // com.apple.private.thread-set-state. When the caller is launchd,
+            // the resulting GUARD_EXC_THREAD_SET_STATE terminates PID 1, even
+            // if thread_set_state's return value is checked. Keep the initial
+            // thread state intact and use the existing dyld entry trampoline.
+            if (__builtin_available(iOS 17.0, *)) {
+                cs_allow_invalid(bsd_proc, false);
+                int redirectResult = hook_dyld_entry(task, dyld_address, dyld_entry, (uint64_t)new_entry);
+                roothide_stage_log("dyld.entry.redirect pid=%d mode=trampoline result=%d", pid, redirectResult);
+                if (getpid() == 1) {
+                    roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+                        "dyld.entry.redirect caller=1 pid=%d mode=trampoline result=%d", pid, redirectResult);
+                }
+                if (redirectResult != 0) {
+                    JBLogError("hook_dyld_entry failed");
+                    goto reentry_end;
+                }
+                reentry = true;
+                break;
+            }
 
 #ifdef __arm64e__
             void* savedPC = threadState.__opaque_pc;
