@@ -141,6 +141,29 @@ rollback:
     return r < 0 ? EIO : (r ? r : rollbackError);
 }
 
+int proc_credential_bootstrap_self(void)
+{
+    pthread_mutex_lock(&credentialLock);
+    const char *phase = "find_launchd";
+    uint64_t proc = proc_self(), donor = proc_find(1);
+    struct rh_credential root;
+    int r = proc && donor ? 0 : ESRCH;
+    if (!r) {
+        phase = "read_launchd_identity";
+        r = proc_credential_read(donor, &root);
+    }
+    if (!r && (root.uid || root.ruid || root.svuid || root.gid || root.rgid || root.svgid)) r = EACCES;
+    if (!r) {
+        phase = "install_launchd_credential";
+        // launchd remains alive with a stable root identity. Transfer counted
+        // references and task metadata; never edit its hashed credential/label.
+        r = credential_install(proc, donor, &root);
+    }
+    roothide_stage_log("credential.bootstrap.end phase=%s proc=%llx donor=%llx result=%d", phase, proc, donor, r);
+    pthread_mutex_unlock(&credentialLock);
+    return r;
+}
+
 static int64_t credential_milliseconds(void)
 {
     struct timespec ts;
@@ -222,21 +245,33 @@ int proc_credential_set(uint64_t proc, const char *executable, const struct rh_c
     bool attrReady = false, actionsReady = false;
     pid_t pid = 0;
     int donorVersion = 0;
+    const char *phase = "pipe_ready";
     r = credential_pipe(ready);
     if (r) goto done;
+    phase = "pipe_release";
     r = credential_pipe(release);
     if (r) goto done;
+    phase = "spawnattr_init";
     r = posix_spawnattr_init(&attr);
     if (r) goto done;
     attrReady = true;
-    r = posix_spawnattr_set_persona_np(&attr, 99, 1);
-    if (!r) r = posix_spawnattr_set_persona_uid_np(&attr, 0);
-    if (!r) r = posix_spawnattr_set_persona_gid_np(&attr, 0);
-    if (!r) r = posix_spawnattr_setflags(&attr, POSIX_SPAWN_START_SUSPENDED);
+    // Root callers can inherit root directly. Asking for a persona still
+    // requires com.apple.private.persona-mgmt even when the caller is root.
+    if (geteuid() != 0) {
+        phase = "persona";
+        r = posix_spawnattr_set_persona_np(&attr, 99, 1);
+        if (!r) { phase = "persona_uid"; r = posix_spawnattr_set_persona_uid_np(&attr, 0); }
+        if (!r) { phase = "persona_gid"; r = posix_spawnattr_set_persona_gid_np(&attr, 0); }
+        if (r) goto done;
+    }
+    phase = "spawn_flags";
+    r = posix_spawnattr_setflags(&attr, POSIX_SPAWN_START_SUSPENDED);
     if (r) goto done;
+    phase = "file_actions_init";
     r = posix_spawn_file_actions_init(&actions);
     if (r) goto done;
     actionsReady = true;
+    phase = "file_actions";
     r = posix_spawn_file_actions_adddup2(&actions, ready[1], 3);
     if (!r) r = posix_spawn_file_actions_adddup2(&actions, release[0], 4);
     for (unsigned i = 0; !r && i < 2; i++) {
@@ -258,20 +293,26 @@ int proc_credential_set(uint64_t proc, const char *executable, const struct rh_c
     // or the on-disk dyld may still belong to the previous installed version.
     char *env[] = {RH_CREDENTIAL_HELPER_ENV "=1", "_SafeMode=1", "DYLD_IN_CACHE=0",
                    proc == proc_self() ? RH_CREDENTIAL_MAIN_ONLY_ENV "=1" : NULL, NULL};
+    phase = "spawn";
     r = posix_spawn(&pid, executable, &actions, &attr, argv, env);
     if (r) goto done;
     donorVersion = proc_get_pidversion(pid);
+    phase = "find_helper";
     uint64_t donor = proc_find(pid);
     if (!donor || donorVersion <= 0) { r = ESRCH; goto done; }
     // The early dyld helper has no opportunity to perform normal check-in.
     // Prepare its syscall mask while all of its threads are still suspended.
     proc_allow_all_syscalls(donor);
+    phase = "resume_helper";
     if (proc_get_pidversion(pid) != donorVersion || kill(pid, SIGCONT)) { r = EIO; goto done; }
     close(ready[1]); ready[1] = -1;
     close(release[0]); release[0] = -1;
+    phase = "helper_ready";
     r = credential_ready_read(ready[0]);
     if (r) goto done;
+    phase = "validate_helper_pid";
     if (proc_get_pidversion(pid) != donorVersion || proc_find(pid) != donor) { r = ESRCH; goto done; }
+    phase = "install_helper_credential";
     r = credential_install(proc, donor, identity);
 
 done:
@@ -282,7 +323,7 @@ done:
         if (release[i] >= 0) close(release[i]);
     }
     credential_reap(pid, donorVersion);
-    roothide_stage_log("credential.set.end proc=%llx uid=%u gid=%u result=%d", proc, identity->uid, identity->gid, r);
+    roothide_stage_log("credential.set.end phase=%s proc=%llx uid=%u gid=%u helper_pid=%d result=%d", phase, proc, identity->uid, identity->gid, pid, r);
 unlock:
     pthread_mutex_unlock(&credentialLock);
     return r;

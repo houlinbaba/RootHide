@@ -4,6 +4,10 @@
 #include "credential_types.h"
 
 int proc_credential_read(uint64_t proc, struct rh_credential *out);
+// Certificate bootstrap cannot use the private persona entitlement or fork
+// from its original sandbox. Borrow launchd's immutable root credential for
+// the calling process after stable kernel read/write has been established.
+int proc_credential_bootstrap_self(void);
 // The caller must serialize identity changes; the target is waiting in its
 // check-in/RPC or is the calling application itself. No other set*id operation
 // may change its credential concurrently.

@@ -337,9 +337,16 @@ sets[idx] = NULL;
         struct rh_credential root = _bootstrapOriginalIdentity;
         root.uid = root.ruid = root.svuid = 0;
         root.gid = root.rgid = root.svgid = root.groups[0] = 0;
-        if (!r) r = proc_credential_set(proc, executable, &root);
+        if (!r) {
+            if ([[DOEnvironmentManager sharedManager] isInstalledThroughTrollStore]) {
+                r = proc_credential_set(proc, executable, &root);
+            }
+            else {
+                r = proc_credential_bootstrap_self();
+            }
+        }
         if (r) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot
-                                     userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to install kernel-generated root credentials: %d", r]}];
+                                     userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to prepare bootstrap root credentials: %d", r]}];
         _bootstrapIdentityActive = YES;
     }
     else {
@@ -373,8 +380,9 @@ sets[idx] = NULL;
     if (getgid() != 0) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to get root, gid still %d", getgid()]}];
     
     // Unsandbox
-    // On iOS 17 the donor inherits this executable's TrollStore sandbox
-    // entitlement. Do not mutate the MAC label of a hashed credential.
+    // On iOS 17 TrollStore donors inherit the no-sandbox entitlement, while
+    // certificate bootstrap borrows launchd's immutable credential/label.
+    // Do not mutate the MAC label of a hashed credential.
     NSError *error = nil;
     [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"/var" error:&error];
     if (error) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedUnsandbox userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to unsandbox, /var does not seem accessible (%s)", error.description.UTF8String]}];

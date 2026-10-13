@@ -7,6 +7,7 @@ or validate a device's structure offsets. On macOS also compile the real dyld
 syscall entry for both device architectures as part of the normal build.
 """
 import argparse
+from contextlib import nullcontext
 import os
 from pathlib import Path
 import shutil
@@ -173,6 +174,7 @@ static long fake_syscall(int, uintptr_t, uintptr_t, uintptr_t);
 #define posix_spawn_file_actions_adddup2 rh_test_actions_dup2
 #define posix_spawn_file_actions_addclose rh_test_actions_close
 #define posix_spawn rh_test_spawn
+#define geteuid rh_test_geteuid
 typedef int pid_t;
 typedef unsigned uid_t;
 typedef int posix_spawnattr_t;
@@ -228,12 +230,12 @@ static struct { struct { struct { bool exists; } proc_ro,ucred_rw; } kernelStruc
 #define koffsetof(s,m) OFF_##s##_##m
 _Alignas(16) static unsigned char kmem[65536];
 static bool descriptors[256];
-static int fd_next, fd_count, fail_spawn, fail_persona, ready_mode, ready_cursor;
+static int fd_next, fd_count, fail_spawn, fail_persona, persona_calls, spawn_calls, ready_mode, ready_cursor;
 static int fail_map_at, map_calls, fail_write_at, writes, published_error;
 static int bad_saved, helper_failure, helper_op, privilege_dropped, exit_code;
 static int syscall_order[32], syscall_count, helper_groups_order;
 static int64_t milliseconds;
-static bool donor_alive, donor_syscalls_ready;
+static bool donor_alive, donor_syscalls_ready, launchd_missing;
 static struct rh_credential generated, donor_request;
 static struct rh_credential_ready ready_message;
 static uint64_t target=0x1000, donor_proc=0x1800, old_cred=0x3000, new_cred=0x4000;
@@ -257,7 +259,8 @@ static int kwrite32(uint64_t a,uint32_t b) { return kwritebuf(a,&b,4); }
 static int kwrite64(uint64_t a,uint64_t b) { return kwritebuf(a,&b,8); }
 static uint64_t proc_ucred(uint64_t p) { return kread_ptr(kread_ptr(p+OFF_proc_proc_ro)+OFF_proc_ro_ucred); }
 static uint64_t proc_self(void) { return target; }
-static uint64_t proc_find(pid_t p) { return p==42 && donor_alive ? donor_proc : 0; }
+static uid_t geteuid(void) { return get32(proc_ucred(target)+OFF_ucred_uid); }
+static uint64_t proc_find(pid_t p) { return (p==1 && !launchd_missing) || (p==42 && donor_alive) ? donor_proc : 0; }
 static int proc_get_pidversion(pid_t p) { return p==42 && donor_alive ? 55 : 0; }
 static void proc_allow_all_syscalls(uint64_t p) { assert(p==donor_proc);donor_syscalls_ready=true; }
 static uint64_t kvtophys(uint64_t a) { return a; }
@@ -297,7 +300,7 @@ static pid_t waitpid(pid_t p,int *status,int flags) { assert(p==42 && flags==WNO
 static int posix_spawnattr_init(posix_spawnattr_t *a) { *a=1;return 0; }
 static int posix_spawnattr_destroy(posix_spawnattr_t *a) { assert(*a);*a=0;return 0; }
 static int posix_spawnattr_setflags(posix_spawnattr_t *a,short f) { assert(*a && f==POSIX_SPAWN_START_SUSPENDED);return 0; }
-int posix_spawnattr_set_persona_np(const posix_spawnattr_t *a,uid_t id,uint32_t f) { assert(*a && id==99 && f==1);return fail_persona; }
+int posix_spawnattr_set_persona_np(const posix_spawnattr_t *a,uid_t id,uint32_t f) { assert(*a && id==99 && f==1);persona_calls++;return fail_persona; }
 int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t *a,uid_t id) { assert(*a && !id);return 0; }
 int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *a,uid_t id) { assert(*a && !id);return 0; }
 static int posix_spawn_file_actions_init(posix_spawn_file_actions_t *a) { *a=1;return 0; }
@@ -345,6 +348,7 @@ static long fake_syscall(int n,uintptr_t a,uintptr_t b,uintptr_t c) {
     return 0;
 }
 static int posix_spawn(pid_t *pid,const char *path,const posix_spawn_file_actions_t *a,const posix_spawnattr_t *attr,char *const argv[],char *const env[]) {
+    spawn_calls++;
     assert(*a && *attr && !strcmp(path,"/Applications/Dopamine.app/Dopamine"));
     assert(!strcmp(env[0],RH_CREDENTIAL_HELPER_ENV "=1"));
     if(fail_spawn)return fail_spawn;
@@ -372,6 +376,7 @@ static uint32_t initial_tokens[10];
 static void reset(void) {
     memset(kmem,0,sizeof(kmem));memset(descriptors,0,sizeof(descriptors));
     fd_next=0;fd_count=0;fail_spawn=fail_persona=ready_mode=ready_cursor=0;
+    persona_calls=spawn_calls=0;launchd_missing=false;
     fail_map_at=map_calls=fail_write_at=writes=published_error=bad_saved=0;
     helper_failure=helper_op=privilege_dropped=syscall_count=helper_groups_order=0;
     milliseconds=0;donor_alive=donor_syscalls_ready=false;exit_code=-1;
@@ -424,6 +429,7 @@ int main(void) {
     memset(&generated,0,sizeof(generated)); assert(rh_credential_helper_main(2,malformed));assert(exit_code==1 && ready_message.error==EINVAL);
 
     reset();assert(!proc_credential_set(target,"/Applications/Dopamine.app/Dopamine",&root));
+    assert(persona_calls==1 && spawn_calls==1);
     assert(proc_ucred(target)==new_cred);
     assert(get64(old_cred+16)==2 && get32(old_rw)==2);
     assert(get64(new_cred+16)==3 && get32(new_rw)==3);
@@ -472,6 +478,43 @@ int main(void) {
     reset();put64(old_cred+16,1);put32(old_rw,2);
     assert(!proc_credential_set(target,"/Applications/Dopamine.app/Dopamine",&root));
     assert(get64(old_cred+16)==0 && get32(old_rw)==1);assert_immutable();
+    // Certificate bootstrap must not spawn or require a private persona.
+    struct rh_credential launchd={0,0,0,0,0,0,1,{0}};
+    reset();store_identity(new_cred,&launchd);fail_spawn=fail_persona=EPERM;
+    unsigned char launchd_key[104];memcpy(launchd_key,kmem+new_cred+24,sizeof(launchd_key));
+    assert(!proc_credential_bootstrap_self());
+    assert(!spawn_calls && !persona_calls && !fd_count);
+    assert(proc_ucred(target)==new_cred);
+    assert(get64(old_cred+16)==2 && get32(old_rw)==2);
+    assert(get64(new_cred+16)==3 && get32(new_rw)==3);
+    assert(get32(target+60)==0 && get32(target+64)==0);
+    struct rh_credential borrowed;assert(!proc_credential_read(target,&borrowed));
+    assert(rh_credential_equal(&borrowed,&launchd));
+    assert(!memcmp(launchd_key,kmem+new_cred+24,sizeof(launchd_key)));assert_immutable();
+    int priorWrites=writes, priorMaps=map_calls;
+    assert(!proc_credential_bootstrap_self());
+    assert(writes==priorWrites && map_calls==priorMaps);
+    assert(get64(new_cred+16)==3 && get32(new_rw)==3);
+    reset();launchd_missing=true;assert(proc_credential_bootstrap_self()==ESRCH);assert(!writes && !map_calls);assert_rolled_back();
+    reset();assert(proc_credential_bootstrap_self()==EACCES);assert(!writes && !map_calls);assert_rolled_back();
+    for(int i=1;i<=4;i++){
+        reset();store_identity(new_cred,&launchd);fail_write_at=i;
+        assert(proc_credential_bootstrap_self());assert_rolled_back();
+    }
+    for(int i=1;i<=4;i++){
+        reset();store_identity(new_cred,&launchd);fail_map_at=i;
+        assert(proc_credential_bootstrap_self());assert_rolled_back();
+    }
+    reset();store_identity(new_cred,&launchd);published_error=1;
+    assert(!proc_credential_bootstrap_self());assert(proc_ucred(target)==new_cred);assert_immutable();
+    // A certificate root caller must restore its original mobile identity
+    // through inherited root, even when all persona APIs would deny access.
+    reset();store_identity(old_cred,&launchd);fail_persona=EPERM;
+    memcpy(old_key,kmem+old_cred+24,sizeof(old_key));
+    assert(!proc_credential_set(target,"/Applications/Dopamine.app/Dopamine",&mobile));
+    assert(!persona_calls && spawn_calls==1);
+    assert(!proc_credential_read(target,&borrowed));assert(rh_credential_equal(&borrowed,&mobile));assert_immutable();
+    puts("PASS: certificate bootstrap without spawn/persona, immutable donor, missing/non-root donor, rollback and root-inherited mobile restore");
     puts("PASS: production credential donor, immutable keys, width-correct refs, metadata, rollback, saved-ID validation, timeout, EINTR, EOF, partial read, fd cleanup");
     return 0;
 }
@@ -482,13 +525,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--zig', type=Path)
     parser.add_argument('--tmpdir', type=Path)
+    parser.add_argument('--workdir', type=Path, help='Existing writable scratch directory')
     args = parser.parse_args()
     compiler = [str(args.zig), 'cc'] if args.zig else [shutil.which('clang') or 'clang']
     source = (SOURCE / 'credentials.c').read_text(encoding='utf-8')
     source = '\n'.join(line for line in source.splitlines() if not line.startswith('#include'))
-    with tempfile.TemporaryDirectory(prefix='roothide-credentials-', dir=args.tmpdir) as directory:
+    context = nullcontext(str(args.workdir.resolve())) if args.workdir else tempfile.TemporaryDirectory(prefix='roothide-credentials-', dir=args.tmpdir)
+    with context as directory:
         tmp = Path(directory)
-        (tmp / 'sys').mkdir()
+        (tmp / 'sys').mkdir(exist_ok=True)
         (tmp / 'sys/syscall.h').write_text('\n'.join(f'#define SYS_{name} {i + 1}' for i, name in enumerate(SYSCALLS)), encoding='utf-8')
         harness = tmp / 'test.c'
         harness.write_text(PREFIX + source + SUFFIX, encoding='utf-8')
