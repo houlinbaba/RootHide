@@ -5,6 +5,22 @@
 #include <stdint.h>
 #include <string.h>
 
+// Apple's firmware CDN uses cdn-apple.com in addition to apple.com.
+// Match the whole domain or a subdomain boundary, never a bare suffix.
+static inline bool do_firmware_apple_host(const char *host)
+{
+    if (!host) return false;
+    size_t length = strlen(host);
+    const char *domains[] = {"apple.com", "cdn-apple.com"};
+    for (size_t i = 0; i < sizeof(domains) / sizeof(domains[0]); i++) {
+        size_t domainLength = strlen(domains[i]);
+        if (length >= domainLength &&
+            memcmp(host + length - domainLength, domains[i], domainLength) == 0 &&
+            (length == domainLength || host[length - domainLength - 1] == '.')) return true;
+    }
+    return false;
+}
+
 // Only accept a complete IM4P container. XPF handles payload decompression;
 // the BuildManifest digest binds the whole container to the selected identity.
 static inline bool do_firmware_der(const uint8_t **cursor, const uint8_t *end,

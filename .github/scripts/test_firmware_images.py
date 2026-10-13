@@ -20,6 +20,20 @@ C_CASES = r'''
 #include <assert.h>
 #include <stdio.h>
 int main(int argc, char **argv) {
+    assert(do_firmware_apple_host("apple.com"));
+    assert(do_firmware_apple_host("appldnld.apple.com"));
+    assert(do_firmware_apple_host("mesu.apple.com"));
+    assert(do_firmware_apple_host("cdn-apple.com"));
+    assert(do_firmware_apple_host("updates.cdn-apple.com"));
+    assert(do_firmware_apple_host("updates-http.cdn-apple.com"));
+    assert(!do_firmware_apple_host(NULL));
+    assert(!do_firmware_apple_host(""));
+    assert(!do_firmware_apple_host("evilapple.com"));
+    assert(!do_firmware_apple_host("evilcdn-apple.com"));
+    assert(!do_firmware_apple_host("updates.cdn-apple.com.evil.example"));
+    assert(!do_firmware_apple_host("apple.com.evil.example"));
+    assert(!do_firmware_apple_host("example.com"));
+    puts("PASS: production Apple firmware host validation, official CDN and deceptive domain boundaries");
     unsigned char valid[] = {0x30,23,0x16,4,'I','M','4','P',0x16,4,'s','p','t','m',0x16,1,'1',0x04,6,1,2,3,4,5,6};
     assert(do_firmware_im4p(valid,sizeof(valid),"sptm"));
     assert(!do_firmware_im4p(valid,sizeof(valid),"trxm"));
@@ -58,14 +72,18 @@ static NSString *firmwareURL = @"https://updates.cdn-apple.com/test.ipsw";
 static BOOL ota;
 static int resolves, downloads;
 NSString *getFirmwareURL(bool *isOTA) { ++resolves; *isOTA=ota; return firmwareURL; }
-void roothide_stage_log(const char *fmt, ...) { (void)fmt; }
+void roothide_stage_log(const char *fmt, ...) {
+    va_list arguments; va_start(arguments,fmt);
+    vfprintf(stderr,fmt,arguments); fputc('\n',stderr);
+    va_end(arguments);
+}
 @implementation Partial
 + (instancetype)partialZipWithURL:(NSURL *)url error:(NSError **)error {
     (void)url; (void)error; return [self new];
 }
 - (NSData *)getFileForPath:(NSString *)path error:(NSError **)error {
     ++downloads; NSData *data=archiveFiles[path];
-    if (!data && error) *error=[NSError errorWithDomain:@"mock" code:1 userInfo:nil];
+    if (!data && error) *error=[NSError errorWithDomain:@"mock" code:1 userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Missing fixture ZIP entry: %@",path]}];
     return data;
 }
 @end
@@ -98,7 +116,9 @@ static void setManifest(NSDictionary *manifest) {
     archiveFiles[@"BuildManifest.plist"]=[NSPropertyListSerialization dataWithPropertyList:manifest format:NSPropertyListXMLFormat_v1_0 options:0 error:NULL];
 }
 static NSDictionary *get(NSString *cache, BOOL requiresSPTM, NSError **error) {
-    return [DOFirmwareManager firmwareForDevice:@"iPhone16,2" board:@"D84AP" build:@"21A360" requiresSPTM:requiresSPTM cacheDirectory:cache error:error];
+    NSDictionary *paths=[DOFirmwareManager firmwareForDevice:@"iPhone16,2" board:@"D84AP" build:@"21A360" requiresSPTM:requiresSPTM cacheDirectory:cache error:error];
+    if (!paths && error && *error) NSLog(@"Firmware test cache=%@ error=%@",cache,*error);
+    return paths;
 }
 static NSString *base(NSString *cache) { return [cache stringByAppendingPathComponent:@"iPhone16,2-d84ap-21A360"]; }
 static void noPartialCache(NSString *cache) {
@@ -193,8 +213,17 @@ int main(void) {
         for (NSString *name in archiveFiles) otaFiles[[@"AssetData/boot" stringByAppendingPathComponent:name]]=archiveFiles[name];
         archiveFiles=otaFiles;
         assert(get([root stringByAppendingPathComponent:@"ota"],YES,&error).count==3 && !error);
-        ota=NO; firmwareURL=@"https://example.com/not-apple.ipsw";
-        assert(!get([root stringByAppendingPathComponent:@"bad-host"],YES,&error) && error);
+        ota=NO; manifest=fixture(YES); setManifest(manifest);
+        firmwareURL=@"http://updates.cdn-apple.com/test.ipsw";
+        assert(get([root stringByAppendingPathComponent:@"http-upgrade"],YES,&error).count==3 && !error);
+        for (NSString *badURL in @[@"https://example.com/not-apple.ipsw",
+                                    @"https://updates.cdn-apple.com.evil.example/test.ipsw",
+                                    @"https://evilcdn-apple.com/test.ipsw",
+                                    @"https://user:password@updates.cdn-apple.com/test.ipsw",
+                                    @"ftp://updates.cdn-apple.com/test.ipsw"]) {
+            firmwareURL=badURL; beforeDownloads=downloads;
+            assert(!get([root stringByAppendingPathComponent:@"bad-host"],YES,&error) && error && downloads==beforeDownloads);
+        }
         [fm removeItemAtPath:root error:NULL];
         puts("PASS: firmware acquisition, offline cache, corruption, interrupted TXM, identity/digest validation, SPTM pairing and OTA");
     }
@@ -225,6 +254,7 @@ typedef _Bool bool;
 #define NSPropertyListBinaryFormat_v1_0 200
 struct NSRange { NSUInteger location,length; };
 extern int memcmp(const void *,const void *,size_t);
+extern size_t strlen(const char *);
 extern unsigned char *CC_SHA384(const void *,CC_LONG,unsigned char *);
 extern unsigned char *CC_SHA1(const void *,CC_LONG,unsigned char *);
 #import <libjailbreak/roothide_stage.h>
@@ -312,6 +342,12 @@ INTEGRATION_PREFIX = r'''
 #define NSPropertyListXMLFormat_v1_0 100
 #define assert(value) ((void)sizeof(value))
 extern int puts(const char *);
+typedef struct TestFILE FILE;
+typedef __builtin_va_list va_list;
+#define va_start(arguments,last) __builtin_va_start(arguments,last)
+#define va_end(arguments) __builtin_va_end(arguments)
+extern FILE *stderr;
+extern int vfprintf(FILE *,const char *,va_list), fputc(int,FILE *);
 extern void *memcpy(void *, const void *, size_t);
 extern void *memchr(const void *, int, size_t);
 extern NSString *NSTemporaryDirectory(void), *NSHomeDirectory(void);

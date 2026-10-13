@@ -151,7 +151,7 @@ static NSDictionary *validatedFirmwareAtPath(NSString *directory, NSString *devi
         }
         NSString *host = url.host.lowercaseString;
         if (![url.scheme.lowercaseString isEqual:@"https"] ||
-            !([host isEqual:@"apple.com"] || [host hasSuffix:@".apple.com"]) || url.user || url.password) {
+            !do_firmware_apple_host(host.UTF8String) || url.user || url.password) {
             firmwareError(error, @"Unable to find matching firmware on Apple's download servers. Check your internet connection.", nil);
             return nil;
         }
