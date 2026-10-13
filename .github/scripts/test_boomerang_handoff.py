@@ -126,7 +126,9 @@ RECOVERY_PREFIX = r'''
 typedef int pid_t;
 typedef unsigned mach_port_t, mach_msg_type_number_t;
 #define MACH_PORT_NULL 0
+#ifndef WNOHANG
 #define WNOHANG 1
+#endif
 #define mach_task_self() 1
 static mach_port_t ports[3] = {0, 0, 42};
 static int primitive_result, done_result, done_calls, wait_calls;
@@ -144,9 +146,10 @@ static int fake_unsetenv(const char *key) { (void)key; return 0; }
 static bool is_kcall_available(void) { return false; }
 static int jbclient_initialize_primitives_internal(bool pte) { (void)pte; return primitive_result; }
 static int jbclient_boomerang_done(void) { ++done_calls; return done_result; }
-static pid_t waitpid(pid_t pid, int *status, int flags) {
+static pid_t fake_waitpid(pid_t pid, int *status, int flags) {
     (void)status; assert(pid == 123 && flags == WNOHANG); ++wait_calls; return 0;
 }
+#define waitpid fake_waitpid
 '''
 
 RECOVERY_CASES = r'''
