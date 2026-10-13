@@ -825,9 +825,9 @@ static int enableDeveloperMode(void)
     NSString *rebootLogPath = [[[[DOUIManager sharedInstance] rootHideStageLogPath] stringByDeletingLastPathComponent]
                                stringByAppendingPathComponent:@ROOTHIDE_REBOOT_LOG_NAME];
     int rebootLogResult = roothide_reboot_log_configure(rebootLogPath.fileSystemRepresentation);
-    free(jbinfo(rebootLogPath));
-    jbinfo(rebootLogPath) = rebootLogResult == 0 ? strdup(rebootLogPath.fileSystemRepresentation) : NULL;
-    if (rebootLogResult == 0 && !jbinfo(rebootLogPath)) {
+    free(gSystemInfo.rebootLogPath);
+    gSystemInfo.rebootLogPath = rebootLogResult == 0 ? strdup(rebootLogPath.fileSystemRepresentation) : NULL;
+    if (rebootLogResult == 0 && !gSystemInfo.rebootLogPath) {
         rebootLogResult = ENOMEM;
         roothide_reboot_log_configure(NULL);
     }

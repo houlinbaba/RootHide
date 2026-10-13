@@ -238,7 +238,9 @@ def main():
     logger = re.sub(r'^#include[^\n]*\n', '', logger, flags=re.MULTILINE)
     unrestrict = extract((source_dir / 'roothider/common.m').read_text(encoding='utf-8'), 'int unrestrict(')
     assert 'run: python3 .github/scripts/test_reboot_journal.py' in (ROOT / '.github/workflows/roothide.yml').read_text(encoding='utf-8')
-    assert 'iterator(ctx, jailbreakInfo.rebootLogPath)' in (source_dir / 'info.h').read_text(encoding='utf-8')
+    info = (source_dir / 'info.h').read_text(encoding='utf-8')
+    assert '_safe_xpc_dictionary_set_string(xdict, "jailbreakInfo.rebootLogPath", gSystemInfo.rebootLogPath)' in info
+    assert '_safe_xpc_dictionary_get_string(xdict, "jailbreakInfo.rebootLogPath", &gSystemInfo.rebootLogPath)' in info
     assert 'rebootLogPath, @ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH' in (ROOT / 'Application/Dopamine/UI/DOUIManager.m').read_text(encoding='utf-8')
     context = nullcontext(args.workdir.resolve()) if args.workdir else tempfile.TemporaryDirectory(prefix='reboot-journal-')
     with context as directory:

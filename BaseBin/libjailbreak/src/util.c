@@ -644,7 +644,11 @@ int pmap_map_in_with_flags(uint64_t pmap, uint64_t uaStart, uint64_t paStart, ui
 		uint64_t leafLevel = PMAP_TT_L2_LEVEL;
 		uint64_t level2Table = vtophys_lvl(ttep, uaL2Cur, &leafLevel, NULL);
 		if (!level2Table) return -2;
-		physwritebuf(level2Table, tableToWrite, vm_real_kernel_page_size);
+		if (physwritebuf(level2Table, tableToWrite, vm_real_kernel_page_size) != 0) {
+			// Earlier tables may already be installed. Do not advertise a full
+			// physrw handoff or keep writing after this partial mapping failed.
+			return -3;
+		}
 	}
 
 	return 0;

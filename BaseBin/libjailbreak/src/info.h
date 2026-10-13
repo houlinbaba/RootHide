@@ -48,8 +48,6 @@ struct system_info {
 		bool dyld_patch_enabled;
 		// Certificate-installed apps need the real AMFI status before injection.
 		bool preserveDeveloperMode;
-		// Ephemeral path to the activating App's private reboot journal.
-		char *rebootLogPath;
 	} jailbreakInfo;
 
 	struct {
@@ -384,6 +382,10 @@ struct system_info {
 			uint32_t struct_size;
 		} sptm_frame_type_descriptor;
 	} kernelStruct;
+
+	// Append extensions after the frozen layout used by prebuilt frameworks.
+	// This path is serialized separately to retain its existing XPC key.
+	char *rebootLogPath;
 };
 
 extern struct system_info gSystemInfo;
@@ -425,8 +427,7 @@ extern struct system_info gSystemInfo;
 	iterator(ctx, jailbreakInfo.jbrand); \
 	iterator(ctx, jailbreakInfo.palera1n); \
 	iterator(ctx, jailbreakInfo.dyld_patch_enabled); \
-	iterator(ctx, jailbreakInfo.preserveDeveloperMode); \
-	iterator(ctx, jailbreakInfo.rebootLogPath);
+	iterator(ctx, jailbreakInfo.preserveDeveloperMode);
 
 #define JAILBREAK_SETTINGS_ITERATE(ctx, iterator) \
 	iterator(ctx, jailbreakSettings.markAppsAsDebugged); \
@@ -714,10 +715,16 @@ __attribute__((__unused__)) static void _safe_xpc_dictionary_set_string(xpc_obje
 )
 
 #define SYSTEM_INFO_SERIALIZE_COMPONENT(xdict, name) XPC_SET_GENERIC(xdict, #name, gSystemInfo.name)
-#define SYSTEM_INFO_SERIALIZE(xdict) SYSTEM_INFO_ITERATE(xdict, SYSTEM_INFO_SERIALIZE_COMPONENT)
+#define SYSTEM_INFO_SERIALIZE(xdict) do { \
+	SYSTEM_INFO_ITERATE(xdict, SYSTEM_INFO_SERIALIZE_COMPONENT); \
+	_safe_xpc_dictionary_set_string(xdict, "jailbreakInfo.rebootLogPath", gSystemInfo.rebootLogPath); \
+} while (0)
 
 #define SYSTEM_INFO_DESERIALIZE_COMPONENT(xdict, name) XPC_GET_GENERIC(xdict, #name, gSystemInfo.name)
-#define SYSTEM_INFO_DESERIALIZE(xdict) SYSTEM_INFO_ITERATE(xdict, SYSTEM_INFO_DESERIALIZE_COMPONENT)
+#define SYSTEM_INFO_DESERIALIZE(xdict) do { \
+	SYSTEM_INFO_ITERATE(xdict, SYSTEM_INFO_DESERIALIZE_COMPONENT); \
+	_safe_xpc_dictionary_get_string(xdict, "jailbreakInfo.rebootLogPath", &gSystemInfo.rebootLogPath); \
+} while (0)
 
 #define kconstant(name) (gSystemInfo.kernelConstant.name)
 #define jbinfo(name) (gSystemInfo.jailbreakInfo.name)

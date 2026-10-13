@@ -163,6 +163,12 @@ jobs:
       - name: RootHide physical translation regressions
         run: python3 .github/scripts/test_translation_health.py
 
+      - name: Prebuilt framework shared system_info ABI
+        run: python3 .github/scripts/test_prebuilt_system_info_abi.py
+
+      - name: Hookd and full-physrw error propagation regressions
+        run: python3 .github/scripts/test_primitive_error_contracts.py
+
       - name: RootHide envbuf negative and sanitizer regressions
         run: python3 .github/scripts/test_envbuf_runtime.py
 

@@ -354,7 +354,7 @@ def main():
             compiler = [str(args.zig), 'cc']
             obj = temp / 'syntax.m'
             helper = extract(source, 'static int enableDeveloperMode(').replace('jbinfo(', 'jbinfo_devmode(')
-            wrapper = extract(source, '- (void)runWithError:').replace('jbinfo(rebootLogPath)', 'testRebootLogPath')
+            wrapper = extract(source, '- (void)runWithError:').replace('gSystemInfo.rebootLogPath', 'testRebootLogPath')
             extra = extract(source, '- (NSError *)ensureDevModeEnabled').replace('jbinfo(', 'jbinfo_devmode(') + '\n' + wrapper
             syntax_prefix = SYNTAX_PREFIX.replace('extern int enableDeveloperMode(void);', '')
             obj.write_text(syntax_prefix + wait + '\n' + helper + '\n@implementation DOJailbreaker\n' + method + '\n' + extra + '\n@end\n', encoding='utf-8')
