@@ -72,12 +72,13 @@ static int credential_ref(uint64_t cred, bool strong, bool retain)
 // Adapted from opa334/Dopamine's proc_copy_ucred / proc_ucred_update_content
 // (util.c at 939a3a21400f0dc6d6163b2b5999ba2ace0d2732). The donor is waiting
 // at its single-threaded checkpoint; the target is in its RPC/check-in or self.
-// Neither may perform set*id concurrently. Both keep a live thread reference.
-static int credential_install(uint64_t proc, uint64_t donor, const struct rh_credential *identity)
+// Neither may perform set*id concurrently. The source is kept alive by its
+// waiting donor or by the counted references owned by a bootstrap snapshot.
+static int credential_install_ucred(uint64_t proc, uint64_t next, const struct rh_credential *identity)
 {
     if (!gSystemInfo.kernelStruct.proc_ro.exists || !gSystemInfo.kernelStruct.ucred_rw.exists ||
         !koffsetof(proc_ro, task_tokens)) return ENOTSUP;
-    uint64_t original = proc_ucred(proc), next = proc_ucred(donor);
+    uint64_t original = proc_ucred(proc);
     if (!original || !next) return ESRCH;
     struct rh_credential actual;
     int r = credential_read(next, &actual);
@@ -139,6 +140,91 @@ rollback:
     rollbackError |= kwritebuf(tokensAddr, tokens, sizeof(tokens));
     if (rollbackError) roothide_stage_log("credential.rollback.failed proc=%llx", proc);
     return r < 0 ? EIO : (r ? r : rollbackError);
+}
+
+static int credential_install(uint64_t proc, uint64_t donor, const struct rh_credential *identity)
+{
+    return credential_install_ucred(proc, proc_ucred(donor), identity);
+}
+
+static int credential_snapshot_release(struct rh_credential_snapshot *snapshot)
+{
+    // Clear each flag only after its counted reference has been released.
+    // A partial failure remains owned and can be retried without double free.
+    if (snapshot->strongRetained) {
+        int r = credential_ref(snapshot->ucred, true, false);
+        if (r) return r;
+        snapshot->strongRetained = false;
+    }
+    if (snapshot->weakRetained) {
+        int r = credential_ref(snapshot->ucred, false, false);
+        if (r) return r;
+        snapshot->weakRetained = false;
+    }
+    memset(snapshot, 0, sizeof(*snapshot));
+    return 0;
+}
+
+int proc_credential_snapshot_self(struct rh_credential_snapshot *snapshot)
+{
+    if (!snapshot) return EINVAL;
+    if (!gSystemInfo.kernelStruct.proc_ro.exists || !gSystemInfo.kernelStruct.ucred_rw.exists) return ENOTSUP;
+    pthread_mutex_lock(&credentialLock);
+    int r = 0;
+    const char *phase = "read_original";
+    if (snapshot->proc || snapshot->ucred || snapshot->weakRetained || snapshot->strongRetained) {
+        r = EBUSY;
+        goto done;
+    }
+    uint64_t proc = proc_self(), cred = proc ? proc_ucred(proc) : 0;
+    struct rh_credential identity;
+    r = cred ? credential_read(cred, &identity) : ESRCH;
+    if (r) goto done;
+    snapshot->proc = proc;
+    snapshot->ucred = cred;
+    snapshot->identity = identity;
+    phase = "retain_weak";
+    r = credential_ref(cred, false, true);
+    if (!r) {
+        snapshot->weakRetained = true;
+        phase = "retain_strong";
+        r = credential_ref(cred, true, true);
+        if (!r) snapshot->strongRetained = true;
+    }
+    if (r) {
+        // If rollback itself fails, keep the remaining pin in the snapshot so
+        // the App's ordinary cleanup can release it before discarding state.
+        int releaseError = credential_snapshot_release(snapshot);
+        if (releaseError) phase = "release_failed_capture";
+    }
+done:
+    roothide_stage_log("credential.snapshot.end phase=%s proc=%llx ucred=%llx weak=%d strong=%d result=%d",
+                       phase, snapshot->proc, snapshot->ucred, snapshot->weakRetained, snapshot->strongRetained, r);
+    pthread_mutex_unlock(&credentialLock);
+    return r;
+}
+
+int proc_credential_restore_self(struct rh_credential_snapshot *snapshot)
+{
+    if (!snapshot) return EINVAL;
+    pthread_mutex_lock(&credentialLock);
+    const char *phase = "validate_snapshot";
+    int r = snapshot->proc && snapshot->ucred && snapshot->proc == proc_self() ? 0 : EINVAL;
+    if (!r && proc_ucred(snapshot->proc) != snapshot->ucred) {
+        if (!snapshot->weakRetained || !snapshot->strongRetained) r = EINVAL;
+        else {
+            phase = "install_original";
+            r = credential_install_ucred(snapshot->proc, snapshot->ucred, &snapshot->identity);
+        }
+    }
+    if (!r) {
+        phase = "release_snapshot";
+        r = credential_snapshot_release(snapshot);
+    }
+    roothide_stage_log("credential.restore.end phase=%s weak=%d strong=%d result=%d",
+                       phase, snapshot->weakRetained, snapshot->strongRetained, r);
+    pthread_mutex_unlock(&credentialLock);
+    return r;
 }
 
 int proc_credential_bootstrap_self(void)
@@ -304,7 +390,18 @@ int proc_credential_set(uint64_t proc, const char *executable, const struct rh_c
     // Prepare its syscall mask while all of its threads are still suspended.
     proc_allow_all_syscalls(donor);
     phase = "resume_helper";
-    if (proc_get_pidversion(pid) != donorVersion || kill(pid, SIGCONT)) { r = EIO; goto done; }
+    int currentVersion = proc_get_pidversion(pid);
+    if (currentVersion != donorVersion) {
+        roothide_stage_log("credential.helper.resume pid=%d expected_version=%d actual_version=%d result=%d",
+                           pid, donorVersion, currentVersion, ESRCH);
+        r = ESRCH;
+        goto done;
+    }
+    if (kill(pid, SIGCONT)) {
+        r = errno ?: EIO;
+        roothide_stage_log("credential.helper.resume pid=%d version=%d signal_errno=%d", pid, donorVersion, r);
+        goto done;
+    }
     close(ready[1]); ready[1] = -1;
     close(release[0]); release[0] = -1;
     phase = "helper_ready";

@@ -17,6 +17,14 @@ struct rh_credential {
     uint32_t groups[RH_CREDENTIAL_GROUPS];
 };
 
+// Process-local owner of counted references to the exact original credential,
+// including its sandbox label. Zero-initialize, capture, then restore once.
+struct rh_credential_snapshot {
+    uint64_t proc, ucred;
+    struct rh_credential identity;
+    bool weakRetained, strongRetained;
+};
+
 struct rh_credential_ready {
     uint32_t magic;
     int32_t error;

@@ -15,7 +15,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface DOJailbreaker : NSObject
 {
     xpc_object_t _systemInfoXdict;
-    struct rh_credential _bootstrapOriginalIdentity;
+    struct rh_credential_snapshot _bootstrapCredentialSnapshot;
     BOOL _bootstrapIdentityActive;
 }
 

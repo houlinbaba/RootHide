@@ -334,10 +334,13 @@ sets[idx] = NULL;
 {
     uint64_t proc = proc_self();
     if (@available(iOS 17.0, *)) {
-        int r = proc_credential_read(proc, &_bootstrapOriginalIdentity);
+        int r = proc_credential_snapshot_self(&_bootstrapCredentialSnapshot);
+        // A failed capture may still own a reference if its rollback failed.
+        // Route that state through cleanup before returning to UIKit.
+        _bootstrapIdentityActive = _bootstrapCredentialSnapshot.ucred != 0;
         char executable[PROC_PIDPATHINFO_MAXSIZE];
         if (!r && proc_pidpath(getpid(), executable, sizeof(executable)) <= 0) r = ESRCH;
-        struct rh_credential root = _bootstrapOriginalIdentity;
+        struct rh_credential root = _bootstrapCredentialSnapshot.identity;
         root.uid = root.ruid = root.svuid = 0;
         root.gid = root.rgid = root.svgid = root.groups[0] = 0;
         if (!r) {
@@ -350,7 +353,6 @@ sets[idx] = NULL;
         }
         if (r) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot
                                      userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to prepare bootstrap root credentials: %d", r]}];
-        _bootstrapIdentityActive = YES;
     }
     else {
         uint64_t ucred = proc_ucred(proc);
@@ -784,9 +786,7 @@ static int enableDeveloperMode(void)
 - (NSError *)cleanUpPostExploitation
 {
     if (_bootstrapIdentityActive) {
-        char executable[PROC_PIDPATHINFO_MAXSIZE];
-        int r = proc_pidpath(getpid(), executable, sizeof(executable)) > 0 ?
-            proc_credential_set(proc_self(), executable, &_bootstrapOriginalIdentity) : ESRCH;
+        int r = proc_credential_restore_self(&_bootstrapCredentialSnapshot);
         roothide_stage_log("bootstrap.credential_restore.end result=%d uid=%u euid=%u gid=%u egid=%u",
                            r, (unsigned)getuid(), (unsigned)geteuid(), (unsigned)getgid(), (unsigned)getegid());
         if (r) {

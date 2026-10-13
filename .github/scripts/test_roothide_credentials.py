@@ -230,8 +230,8 @@ static struct { struct { struct { bool exists; } proc_ro,ucred_rw; } kernelStruc
 #define koffsetof(s,m) OFF_##s##_##m
 _Alignas(16) static unsigned char kmem[65536];
 static bool descriptors[256];
-static int fd_next, fd_count, fail_spawn, fail_persona, persona_calls, spawn_calls, ready_mode, ready_cursor;
-static int fail_map_at, map_calls, fail_write_at, writes, published_error;
+static int fd_next, fd_count, fail_spawn, fail_persona, fail_resume, persona_calls, spawn_calls, ready_mode, ready_cursor;
+static int fail_map_at, fail_map_extra, map_calls, fail_write_at, writes, published_error;
 static int bad_saved, helper_failure, helper_op, privilege_dropped, exit_code;
 static int syscall_order[32], syscall_count, helper_groups_order;
 static int64_t milliseconds;
@@ -268,7 +268,8 @@ static int physaccess_mapped(uint64_t a,uint64_t n,kernel_map_accessor block) {
     assert(a+n<sizeof(kmem));
     assert(a==old_cred+16 || a==new_cred+16 || a==old_rw || a==new_rw);
     assert(n==(a==old_rw || a==new_rw ? 4 : 8));
-    if (++map_calls==fail_map_at) return EIO;
+    ++map_calls;
+    if (map_calls==fail_map_at || map_calls==fail_map_extra) return EIO;
     block(kmem+a); return 0;
 }
 static void roothide_stage_log(const char *f,...) { (void)f; }
@@ -293,7 +294,7 @@ static int resume_donor(void);
 static int kill(pid_t p,int sig) {
     assert(p==42 && (sig==SIGKILL || sig==SIGCONT));
     if(sig==SIGKILL)donor_alive=false;
-    else{assert(donor_syscalls_ready);resume_donor();}
+    else{assert(donor_syscalls_ready);if(fail_resume){errno=fail_resume;return -1;}resume_donor();}
     return 0;
 }
 static pid_t waitpid(pid_t p,int *status,int flags) { assert(p==42 && flags==WNOHANG); *status=0; return p; }
@@ -375,9 +376,9 @@ static unsigned char old_key[104];
 static uint32_t initial_tokens[10];
 static void reset(void) {
     memset(kmem,0,sizeof(kmem));memset(descriptors,0,sizeof(descriptors));
-    fd_next=0;fd_count=0;fail_spawn=fail_persona=ready_mode=ready_cursor=0;
+    fd_next=0;fd_count=0;fail_spawn=fail_persona=fail_resume=ready_mode=ready_cursor=0;
     persona_calls=spawn_calls=0;launchd_missing=false;
-    fail_map_at=map_calls=fail_write_at=writes=published_error=bad_saved=0;
+    fail_map_at=fail_map_extra=map_calls=fail_write_at=writes=published_error=bad_saved=0;
     helper_failure=helper_op=privilege_dropped=syscall_count=helper_groups_order=0;
     milliseconds=0;donor_alive=donor_syscalls_ready=false;exit_code=-1;
     gSystemInfo.kernelStruct.proc_ro.exists=gSystemInfo.kernelStruct.ucred_rw.exists=true;
@@ -393,6 +394,8 @@ static void reset(void) {
     memcpy(old_key,kmem+old_cred+24,sizeof(old_key));
     put32(target+60,mobile.svuid);put32(target+64,mobile.svgid);
     for(unsigned i=0;i<10;i++)initial_tokens[i]=0x11223000+i;
+    initial_tokens[0]=initial_tokens[3]=initial_tokens[5]=mobile.uid;
+    initial_tokens[1]=initial_tokens[4]=initial_tokens[6]=mobile.gid;
     memcpy(kmem+0x2000+128,initial_tokens,sizeof(initial_tokens));
 }
 static void assert_immutable(void) {
@@ -468,6 +471,7 @@ int main(void) {
     reset();published_error=1;assert(!proc_credential_set(target,"/Applications/Dopamine.app/Dopamine",&root));assert(proc_ucred(target)==new_cred);assert_immutable();
     reset();fail_spawn=ENOENT;assert(proc_credential_set(target,"/Applications/Dopamine.app/Dopamine",&root)==ENOENT);assert_rolled_back();
     reset();fail_persona=EPERM;assert(proc_credential_set(target,"/Applications/Dopamine.app/Dopamine",&root)==EPERM);assert_rolled_back();
+    reset();fail_resume=EPERM;assert(proc_credential_set(target,"/Applications/Dopamine.app/Dopamine",&root)==EPERM);assert_rolled_back();
     reset();ready_mode=1;assert(proc_credential_set(target,"/Applications/Dopamine.app/Dopamine",&root)==ETIMEDOUT);assert_rolled_back();
     reset();ready_mode=2;assert(proc_credential_set(target,"/Applications/Dopamine.app/Dopamine",&root)==ETIMEDOUT);assert_rolled_back();
     reset();ready_mode=3;assert(proc_credential_set(target,"/Applications/Dopamine.app/Dopamine",&root)==EPIPE);assert_rolled_back();
@@ -514,6 +518,102 @@ int main(void) {
     assert(!proc_credential_set(target,"/Applications/Dopamine.app/Dopamine",&mobile));
     assert(!persona_calls && spawn_calls==1);
     assert(!proc_credential_read(target,&borrowed));assert(rh_credential_equal(&borrowed,&mobile));assert_immutable();
+
+    // Feedback (8): elevation/injection succeed, then cleanup cannot resume a
+    // helper. Pin the exact original credential and restore with all helper
+    // operations forbidden. The old sandbox label/hash key must be preserved.
+    struct rh_credential_snapshot snapshot={0};
+    reset();store_identity(new_cred,&launchd);
+    fail_spawn=fail_persona=fail_resume=EPERM;
+    assert(!proc_credential_snapshot_self(&snapshot));
+    assert(snapshot.proc==target && snapshot.ucred==old_cred);
+    assert(snapshot.weakRetained && snapshot.strongRetained);
+    assert(get64(old_cred+16)==4 && get32(old_rw)==4);
+    assert(proc_credential_snapshot_self(&snapshot)==EBUSY);
+    assert(get64(old_cred+16)==4 && get32(old_rw)==4);
+    assert(!proc_credential_bootstrap_self());
+    assert(!proc_credential_restore_self(&snapshot));
+    assert(!snapshot.proc && !snapshot.ucred && !snapshot.weakRetained && !snapshot.strongRetained);
+    assert(!spawn_calls && !persona_calls && !syscall_count);
+    assert_rolled_back();
+
+    // XNU can release every other old thread/holder after elevation; the pin
+    // alone still keeps the original object live until it is reinstalled.
+    reset();store_identity(new_cred,&launchd);
+    assert(!proc_credential_snapshot_self(&snapshot));
+    assert(!proc_credential_bootstrap_self());
+    put64(old_cred+16,1);put32(old_rw,1);
+    assert(!proc_credential_restore_self(&snapshot));
+    assert(proc_ucred(target)==old_cred);
+    assert(get64(old_cred+16)==1 && get32(old_rw)==1);
+    assert(get64(new_cred+16)==2 && get32(new_rw)==2);assert_immutable();
+
+    // Cleanup before elevation and repeated capture/restore leak no pins.
+    reset();assert(!proc_credential_snapshot_self(&snapshot));
+    assert(!proc_credential_restore_self(&snapshot));assert_rolled_back();
+    for(int i=0;i<3;i++){
+        store_identity(new_cred,&launchd);
+        assert(!proc_credential_snapshot_self(&snapshot));
+        assert(!proc_credential_bootstrap_self());
+        assert(!proc_credential_restore_self(&snapshot));assert_rolled_back();
+    }
+    assert(proc_credential_restore_self(&snapshot)==EINVAL);
+    assert(proc_credential_snapshot_self(NULL)==EINVAL);
+    assert(proc_credential_restore_self(NULL)==EINVAL);
+
+    // Capture failure undoes acquired refs. Restore failure leaves a usable
+    // snapshot and the root credential unchanged, for an explicit retry.
+    for(int i=1;i<=2;i++){
+        reset();fail_map_at=i;
+        assert(proc_credential_snapshot_self(&snapshot));
+        assert(!snapshot.ucred && !snapshot.weakRetained && !snapshot.strongRetained);
+        assert_rolled_back();
+    }
+    reset();fail_map_at=2;fail_map_extra=3;
+    assert(proc_credential_snapshot_self(&snapshot));
+    assert(snapshot.ucred==old_cred && snapshot.weakRetained && !snapshot.strongRetained);
+    assert(proc_ucred(target)==old_cred && get32(old_rw)==4 && get64(old_cred+16)==3);
+    fail_map_at=fail_map_extra=0;
+    assert(!proc_credential_restore_self(&snapshot));assert_rolled_back();
+    for(int i=1;i<=4;i++){
+        reset();store_identity(new_cred,&launchd);
+        assert(!proc_credential_snapshot_self(&snapshot));assert(!proc_credential_bootstrap_self());
+        fail_map_at=map_calls+i;
+        assert(proc_credential_restore_self(&snapshot));
+        assert(proc_ucred(target)==new_cred && snapshot.weakRetained && snapshot.strongRetained);
+        assert(get64(old_cred+16)==3 && get32(old_rw)==3);
+        assert(get64(new_cred+16)==3 && get32(new_rw)==3);
+        fail_map_at=0;assert(!proc_credential_restore_self(&snapshot));assert_rolled_back();
+    }
+    for(int i=1;i<=4;i++){
+        reset();store_identity(new_cred,&launchd);
+        assert(!proc_credential_snapshot_self(&snapshot));assert(!proc_credential_bootstrap_self());
+        fail_write_at=writes+i;
+        assert(proc_credential_restore_self(&snapshot));
+        assert(proc_ucred(target)==new_cred && snapshot.weakRetained && snapshot.strongRetained);
+        fail_write_at=0;assert(!proc_credential_restore_self(&snapshot));assert_rolled_back();
+    }
+    // Release failures after reinstall retain only the unreleased ownership.
+    for(int i=5;i<=6;i++){
+        reset();store_identity(new_cred,&launchd);
+        assert(!proc_credential_snapshot_self(&snapshot));assert(!proc_credential_bootstrap_self());
+        fail_map_at=map_calls+i;
+        assert(proc_credential_restore_self(&snapshot));
+        assert(proc_ucred(target)==old_cred && snapshot.weakRetained);
+        assert(snapshot.strongRetained==(i==5));
+        fail_map_at=0;assert(!proc_credential_restore_self(&snapshot));assert_rolled_back();
+    }
+    reset();store_identity(new_cred,&launchd);
+    assert(!proc_credential_snapshot_self(&snapshot));assert(!proc_credential_bootstrap_self());
+    published_error=1;
+    assert(!proc_credential_restore_self(&snapshot));assert_rolled_back();
+    reset();gSystemInfo.kernelStruct.ucred_rw.exists=false;
+    assert(proc_credential_snapshot_self(&snapshot)==ENOTSUP && !snapshot.ucred && !map_calls);
+    reset();assert(!proc_credential_snapshot_self(&snapshot));
+    uint64_t bound=snapshot.proc;snapshot.proc=donor_proc;
+    assert(proc_credential_restore_self(&snapshot)==EINVAL && snapshot.weakRetained && snapshot.strongRetained);
+    snapshot.proc=bound;assert(!proc_credential_restore_self(&snapshot));assert_rolled_back();
+    puts("PASS: pinned original credential restore without helper, immutable label, last-live-ref lifetime, rollback/retry and no reference leaks");
     puts("PASS: certificate bootstrap without spawn/persona, immutable donor, missing/non-root donor, rollback and root-inherited mobile restore");
     puts("PASS: production credential donor, immutable keys, width-correct refs, metadata, rollback, saved-ID validation, timeout, EINTR, EOF, partial read, fd cleanup");
     return 0;
