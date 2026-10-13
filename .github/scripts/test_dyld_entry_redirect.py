@@ -121,6 +121,16 @@ static kern_return_t thread_get_state(mach_port_t p,int flavor,thread_state_t st
     if(failure==8)return 5;arm_thread_state64_t *s=(void*)state;
     s->__opaque_pc=(void*)(uintptr_t)((p==11 && !no_entry)?0x100800:0x100900);s->sp=0x800000;s->fp=0x800000;s->lr=0;return 0;
 }
+/* Darwin's standard headers can already import these SDK helpers. The
+ * deterministic thread model replaces them deliberately, after all includes. */
+#undef __darwin_arm_thread_state64_ptrauth_strip
+#undef __darwin_arm_thread_state64_get_pc
+#undef __darwin_arm_thread_state64_get_sp
+#undef __darwin_arm_thread_state64_get_fp
+#undef __darwin_arm_thread_state64_get_lr
+#undef __darwin_arm_thread_state64_set_pc_fptr
+#undef ptrauth_key_process_independent_code
+#undef ptrauth_sign_unauthenticated
 #define __darwin_arm_thread_state64_ptrauth_strip(s) ((void)(s))
 #define __darwin_arm_thread_state64_get_pc(s) ((s).__opaque_pc)
 #define __darwin_arm_thread_state64_get_sp(s) ((s).sp)
