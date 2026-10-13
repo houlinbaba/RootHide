@@ -154,3 +154,4 @@
 "RootHide_Log_Unavailable" = "No saved RootHide stage log is available.";
 "RootHide_Log_Export_Failed" = "Could not create the RootHide diagnostic export. Try again.";
 "Userspace_Reboot_Failed_Format" = "The userspace reboot command failed (result: %d). Open Settings and share the RootHide log.";
+"Jailbreak_Reboot_Before_Retry" = "RootHide is already running. Restart your device before opening Dopamine and jailbreaking again.";

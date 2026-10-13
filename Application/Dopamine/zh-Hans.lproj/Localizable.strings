@@ -151,3 +151,4 @@
 "RootHide_Log_Unavailable" = "没有可导出的 RootHide 阶段日志。";
 "RootHide_Log_Export_Failed" = "无法生成 RootHide 诊断日志，请重试。";
 "Userspace_Reboot_Failed_Format" = "用户空间重启命令失败（返回值：%d）。请到设置中导出 RootHide 日志。";
+"Jailbreak_Reboot_Before_Retry" = "检测到 RootHide 已在运行。请先重启手机，再打开 Dopamine 重新越狱。";

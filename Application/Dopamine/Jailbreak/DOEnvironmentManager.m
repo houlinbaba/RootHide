@@ -467,7 +467,7 @@ extern char **environ;
         roothide_stage_log("userspace_reboot.request log_open_result=%d", logResult);
         roothide_stage_log("userspace_reboot.spawn.begin uid=%d euid=%d gid=%d",
                            getuid(), geteuid(), getgid());
-        // Initial certificate activation already prepared a root child. Do not
+        // Initial iOS 17 activation already prepared a root child. Do not
         // request another root/unsandbox transition after restoring the App.
         int result = prepared.pid > 0 ? rh_userspace_reboot_finish(&prepared) :
                      [self spawnJbctlAsRootWithArgs:@[@"reboot_userspace"]];

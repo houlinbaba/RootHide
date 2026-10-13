@@ -128,9 +128,22 @@ typedef NS_ENUM(NSInteger, JBErrorCode) {
     JBErrorCodeFailedOffsetValidation        = -15,
     JBErrorCodeFailedDeveloperMode           = -16,
     JBErrorCodeFailedPrepareUserspaceReboot  = -17,
+    JBErrorCodeExistingRootHideSession      = -18,
 };
 
 @implementation DOJailbreaker
+
+- (NSError *)ensureFreshActivation
+{
+    // A relaunched App may lack its platform flag even though the previous
+    // activation already injected launchd. Do not replace that live session's
+    // root or inject another launchdhook while its first reboot is incomplete.
+    bool existingSession = jbclient_roothide_jailbroken();
+    roothide_stage_log("activation.preflight existing_session=%d", existingSession);
+    if (!existingSession) return nil;
+    return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeExistingRootHideSession
+                           userInfo:@{NSLocalizedDescriptionKey:DOLocalizedString(@"Jailbreak_Reboot_Before_Retry")}];
+}
 
 - (NSError *)gatherSystemInformation
 {
@@ -848,6 +861,10 @@ static int enableDeveloperMode(void)
     BOOL idownloadEnabled = [[DOPreferenceManager sharedManager] boolPreferenceValueForKey:@"idownloadEnabled" fallback:NO];
     BOOL appJITEnabled = [[DOPreferenceManager sharedManager] boolPreferenceValueForKey:@"appJITEnabled" fallback:YES];
     NSNumber *jetsamMultiplierOption = [[DOPreferenceManager sharedManager] preferenceValueForKey:@"jetsamMultiplier"];
+    if (!removeJailbreakEnabled) {
+        *errOut = [self ensureFreshActivation];
+        if (*errOut) return;
+    }
     
     struct utsname systemInfo;
     uname(&systemInfo);
@@ -1057,17 +1074,15 @@ setenv("DYLD_INSERT_LIBRARIES", JBROOT_PATH("/basebin/systemhook.dylib"), 1);
     }
 */
 
-    // The certificate App regains its original sandbox at cleanup. Prepare
-    // the initial reboot under bootstrap root, but keep it gated until finalize.
+    // The iOS 17 App regains its original ucred at cleanup. Prepare the initial
+    // reboot under bootstrap root for both install methods, gated until finalize.
     if (@available(iOS 17.0, *)) {
-        if (![[DOEnvironmentManager sharedManager] isInstalledThroughTrollStore]) {
-            int result = [[DOEnvironmentManager sharedManager] prepareBootstrapUserspaceReboot];
-            if (result) {
-                *errOut = [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedPrepareUserspaceReboot
-                                         userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to prepare userspace reboot: %d", result]}];
-                [self cleanUpPostExploitation];
-                return;
-            }
+        int result = [[DOEnvironmentManager sharedManager] prepareBootstrapUserspaceReboot];
+        if (result) {
+            *errOut = [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedPrepareUserspaceReboot
+                                     userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to prepare userspace reboot: %d", result]}];
+            [self cleanUpPostExploitation];
+            return;
         }
     }
     roothide_stage_log("activation.cleanup.begin");

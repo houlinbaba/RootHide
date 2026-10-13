@@ -249,6 +249,8 @@ __attribute__((objc_root_class)) @interface NSObject @end
 @end
 extern NSString *const JBErrorDomain, *const NSLocalizedDescriptionKey;
 #define JBErrorCodeFailedPrepareUserspaceReboot -17
+#define JBErrorCodeExistingRootHideSession -18
+extern bool jbclient_roothide_jailbroken(void);
 @interface DOUIManager : NSObject
 + (instancetype)sharedInstance;
 - (NSString *)rootHideStageLogPath;
@@ -298,15 +300,17 @@ def check_arc(temp, zig):
 @end
 @interface DOJailbreaker : NSObject
 - (NSError *)cleanUpPostExploitation;
+- (NSError *)ensureFreshActivation;
 @end
 '''
     app = (ROOT / 'Application/Dopamine/Jailbreak/DOJailbreaker.m').read_text(encoding='utf-8')
-    fragment = app[app.index('    // The certificate App regains its original sandbox'):app.index('    roothide_stage_log("activation.cleanup.begin");')]
+    fragment = app[app.index('    // The iOS 17 App regains its original ucred'):app.index('    roothide_stage_log("activation.cleanup.begin");')]
     # Compile the unchanged production fragment with a local errOut so ARC
     # checks the new activation branch as well as the actual handoff methods.
     probe = temp / 'reboot-arc.m'
     probe.write_text(OBJC_PREFIX + header + interface + '@implementation DOEnvironmentManager\n' + methods + '\n@end\n'
-                     + '@implementation DOJailbreaker\n- (void)checkPreparation:(NSError **)errOut {\n' + fragment + '\n}\n@end\n', encoding='utf-8')
+                     + '@implementation DOJailbreaker\n' + extract(app, '- (NSError *)ensureFreshActivation')
+                     + '\n- (void)checkPreparation:(NSError **)errOut {\n' + fragment + '\n}\n@end\n', encoding='utf-8')
     compiler = [str(zig.resolve()), 'clang'] if zig else ['clang']
     subprocess.run(compiler + ['-cc1', '-triple', 'arm64-apple-ios17.0.0', '-x', 'objective-c',
                               '-fobjc-runtime=ios-17.0.0', '-fobjc-arc', '-fblocks', '-fobjc-exceptions',
@@ -350,7 +354,10 @@ def check_wiring():
     stages = extract(app, '- (void)runStagesWithError:')
     assert stages.index('prepareBootstrapUserspaceReboot') < stages.index('activation.cleanup.begin')
     assert stages.index('activation.cleanup.end') < stages.index('activation.complete')
-    assert 'if (![[DOEnvironmentManager sharedManager] isInstalledThroughTrollStore])' in stages
+    preparation = stages[stages.index('    // The iOS 17 App regains its original ucred'):stages.index('activation.cleanup.begin')]
+    assert 'isInstalledThroughTrollStore' not in preparation
+    assert stages.index('ensureFreshActivation') < stages.index('gatherSystemInformation') < stages.index('doExploitation')
+    assert 'if (!removeJailbreakEnabled) {\n        *errOut = [self ensureFreshActivation];\n        if (*errOut) return;' in stages
     cleanup = extract(app, '- (NSError *)cleanUpPostExploitation')
     assert cleanup.index('cancelPreparedUserspaceReboot') < cleanup.index('exit(EXIT_FAILURE)')
     environment = (ROOT / 'Application/Dopamine/Jailbreak/DOEnvironmentManager.m').read_text(encoding='utf-8')
@@ -367,6 +374,36 @@ def check_wiring():
     assert 'python3 .github/scripts/test_userspace_reboot.py' in workflow
     ui = (ROOT / 'Application/Dopamine/UI/DOUIManager.m').read_text(encoding='utf-8')
     assert 'NSHomeDirectory()' not in extract(ui, '- (NSString *)rootHideStageLogPath')
+
+FRESH_DARWIN = r'''
+#import <Foundation/Foundation.h>
+#include <assert.h>
+#include <stdbool.h>
+#include <stdio.h>
+#define JBErrorCodeExistingRootHideSession -18
+static NSString *const JBErrorDomain=@"test";
+static bool active;
+static bool jbclient_roothide_jailbroken(void) { return active; }
+static void roothide_stage_log(const char *format,...) { (void)format; }
+static NSString *DOLocalizedString(NSString *key) { return key; }
+@interface DOJailbreaker : NSObject
+- (NSError *)ensureFreshActivation;
+@end
+'''
+FRESH_CASES = r'''
+int main(void) {
+    @autoreleasepool {
+        DOJailbreaker *jailbreaker=[DOJailbreaker new];
+        active=false;assert(![jailbreaker ensureFreshActivation]);
+        active=true;NSError *error=[jailbreaker ensureFreshActivation];
+        assert(error && error.code==-18 && [error.domain isEqualToString:JBErrorDomain]);
+        assert([error.localizedDescription isEqualToString:@"Jailbreak_Reboot_Before_Retry"]);
+        active=false;assert(![jailbreaker ensureFreshActivation]);
+        puts("PASS: production activation preflight accepts a fresh boot and rejects an existing RootHide session");
+    }
+    return 0;
+}
+'''
 
 
 def main():
@@ -398,6 +435,13 @@ def main():
         if sys.platform == 'darwin':
             harness.write_text(DARWIN + production + DARWIN_CASES, encoding='utf-8')
             subprocess.run(compiler + sanitizer + flags + [str(harness), str(SOURCE / 'roothide_stage.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, timeout=15)
+            app = (ROOT / 'Application/Dopamine/Jailbreak/DOJailbreaker.m').read_text(encoding='utf-8')
+            objc = temp / 'preflight.m'
+            objc.write_text(FRESH_DARWIN + '@implementation DOJailbreaker\n' + extract(app, '- (NSError *)ensureFreshActivation')
+                            + '\n@end\n' + FRESH_CASES, encoding='utf-8')
+            subprocess.run(compiler + sanitizer + ['-fobjc-arc', '-Wall', '-Wextra', '-Werror',
+                                                  '-framework', 'Foundation', str(objc), '-o', str(binary)], check=True)
             subprocess.run([str(binary)], check=True, timeout=15)
         else:
             print('Real Darwin spawn/pipe and device reboot remain for Apple CI/device validation.')

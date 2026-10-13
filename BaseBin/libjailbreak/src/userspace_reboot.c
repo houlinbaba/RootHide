@@ -65,7 +65,7 @@ static int reboot_reap(pid_t pid)
 int rh_userspace_reboot_finish(struct rh_userspace_reboot *request)
 {
     if (!request || request->pid <= 0 || request->releaseFD < 0) return EINVAL;
-    // Initial certificate activation must have returned to the mobile App.
+    // Initial activation must have returned to the mobile App.
     // Keep the gate closed if callers accidentally skip credential restoration.
     if (getuid() != 501 || geteuid() != 501 || getgid() != 501 || getegid() != 501) {
         rh_userspace_reboot_cancel(request);
