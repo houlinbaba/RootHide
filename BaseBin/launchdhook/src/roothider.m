@@ -113,6 +113,13 @@ void roothide_launchd_preinit()
 	exec_set_patch(false);
 }
 
+static bool shouldHideDeveloperMode(void)
+{
+	// Uninjected launch services must see the enabled status for certificate
+	// installs. Swapping the OID makes them read launch_env_logging instead.
+	return roothide_is_ios16_or_newer() && !jbinfo(preserveDeveloperMode);
+}
+
 void roothide_launchd_postinit(bool firstLoad)
 {
 	JBLogDebug("roothide_launchd_postinit: firstLoad=%d", firstLoad);
@@ -125,7 +132,7 @@ void roothide_launchd_postinit(bool firstLoad)
 	{
 		HOOK_DYLIB_PATH = "";
 		
-		if (roothide_is_ios16_or_newer())
+		if (shouldHideDeveloperMode())
 		{
 			hideDeveloperMode();
 		}

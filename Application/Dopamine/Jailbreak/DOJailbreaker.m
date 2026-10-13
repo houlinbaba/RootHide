@@ -41,6 +41,8 @@
 #import <sys/wait.h>
 #import <CoreServices/LSApplicationProxy.h>
 #import <sys/utsname.h>
+#import <sys/syscall.h>
+#import <unistd.h>
 #import "spawn.h"
 #import "clock_alarm.h"
 #import <IOSurface/IOSurfaceRef.h>
@@ -124,6 +126,7 @@ typedef NS_ENUM(NSInteger, JBErrorCode) {
     JBErrorCodeFailedInitFakeLib             = -13,
     JBErrorCodeFailedDuplicateApps           = -14,
     JBErrorCodeFailedOffsetValidation        = -15,
+    JBErrorCodeFailedDeveloperMode           = -16,
 };
 
 @implementation DOJailbreaker
@@ -435,29 +438,63 @@ sets[idx] = NULL;
     return nil;
 }
 
+// Read the kernel/TXM byte and the unhooked sysctl independently. The latter
+// is the status uninjected launch services use for certificate-installed apps.
+static int enableDeveloperMode(void)
+{
+    uint64_t developerModeStorage = 0;
+    const char *storageSource = "unavailable";
+    if (ksymbol(developer_mode_enabled)) {
+        uint64_t pointer = 0;
+        if (kreadbuf(ksymbol(developer_mode_enabled), &pointer, sizeof(pointer)) != 0) {
+            roothide_stage_log("developer_mode.enable source=kernel pointer_read_failed=1");
+            return EIO;
+        }
+        developerModeStorage = pointer;
+        storageSource = "kernel";
+    }
+    else if (ksymbol_txm(txm_developer_mode_storage)) {
+        developerModeStorage = ksymbol_txm(txm_developer_mode_storage);
+        storageSource = "txm";
+    }
+    if (!developerModeStorage) {
+        roothide_stage_log("developer_mode.enable source=%s storage_resolved=0", storageSource);
+        return ENOENT;
+    }
+
+    uint8_t before = 0, after = 0;
+    int beforeResult = kreadbuf(developerModeStorage, &before, sizeof(before));
+    if (beforeResult != 0) {
+        roothide_stage_log("developer_mode.enable source=%s before_read=%d", storageSource, beforeResult);
+        return EIO;
+    }
+    int writeResult = before == 1 ? 0 : kwrite8(developerModeStorage, 1);
+    int afterResult = kreadbuf(developerModeStorage, &after, sizeof(after));
+    roothide_stage_log("developer_mode.enable source=%s before_read=%d before=%u write=%d after_read=%d after=%u",
+                       storageSource, beforeResult, (unsigned)before, writeResult, afterResult, (unsigned)after);
+    if (writeResult != 0 || afterResult != 0 || after != 1) return EIO;
+
+    const char *query = "security.mac.amfi.developer_mode_status";
+    int enabled = 0;
+    size_t size = sizeof(enabled);
+    int result = (int)syscall(SYS_sysctlbyname, query, strlen(query), &enabled, &size, NULL, 0);
+    int queryError = result == 0 ? 0 : errno;
+    roothide_stage_log("developer_mode.status result=%d errno=%d size=%zu enabled=%d preserve=%d",
+                       result, queryError, size, enabled, jbinfo(preserveDeveloperMode));
+    if (result != 0 || size != sizeof(enabled) || enabled != 1) return EIO;
+    return 0;
+}
+
 - (NSError *)ensureDevModeEnabled
 {
+    // Serialized with the rest of system_info during launchd handoff and
+    // userspace reboot, so launchd can retain this policy without App access.
+    jbinfo(preserveDeveloperMode) = ![[DOEnvironmentManager sharedManager] isInstalledThroughTrollStore];
     if (@available(iOS 16.0, *)) {
-        uint64_t developerModeStorage = 0;
-        const char *storageSource = "unavailable";
-        if (ksymbol(developer_mode_enabled)) {
-            developerModeStorage = kread64(ksymbol(developer_mode_enabled));
-            storageSource = "kernel";
-        }
-        else if (ksymbol_txm(txm_developer_mode_storage)) {
-            developerModeStorage = ksymbol_txm(txm_developer_mode_storage);
-            storageSource = "txm";
-        }
-        if (developerModeStorage) {
-            uint8_t before = 0, after = 0;
-            int beforeResult = kreadbuf(developerModeStorage, &before, sizeof(before));
-            int writeResult = kwrite8(developerModeStorage, 1);
-            int afterResult = kreadbuf(developerModeStorage, &after, sizeof(after));
-            roothide_stage_log("developer_mode.enable source=%s before_read=%d before=%u write=%d after_read=%d after=%u",
-                               storageSource, beforeResult, (unsigned)before, writeResult, afterResult, (unsigned)after);
-        }
-        else {
-            roothide_stage_log("developer_mode.enable source=%s storage_resolved=0", storageSource);
+        int result = enableDeveloperMode();
+        if (result != 0) {
+            return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedDeveloperMode
+                                  userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to enable and verify Developer Mode (%d). Enable it in Settings > Privacy & Security, restart and confirm, then retry.", result]}];
         }
     }
     return nil;

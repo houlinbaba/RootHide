@@ -257,6 +257,14 @@ extern int gBoomerangServer;
 #define jbinfo(field) "/test"
 #define JBErrorCodeFailedLaunchdInjection -11
 extern NSString *const JBErrorDomain;
+#define JBErrorCodeFailedDeveloperMode -16
+extern struct { BOOL preserveDeveloperMode; } testJailbreakInfo;
+#define jbinfo_devmode(field) (testJailbreakInfo.field)
+extern int enableDeveloperMode(void);
+@interface DOEnvironmentManager : NSObject
++ (instancetype)sharedManager;
+- (BOOL)isInstalledThroughTrollStore;
+@end
 @interface DOJailbreaker : NSObject
 - (NSError *)injectLaunchdHook;
 - (NSError *)ensureDevModeEnabled;
@@ -277,6 +285,12 @@ extern int roothide_stage_begin(const char *, BOOL);
 extern void roothide_stage_end(void);
 typedef unsigned long long uint64_t;
 typedef unsigned char uint8_t;
+typedef unsigned long size_t;
+#define EIO 5
+#define ENOENT 2
+#define SYS_sysctlbyname 274
+extern long syscall(int, ...);
+extern size_t strlen(const char *);
 #define ksymbol(name) ((uint64_t)0x1000)
 #define ksymbol_txm(name) ((uint64_t)0x2000)
 extern uint64_t kread64(uint64_t);
@@ -330,8 +344,10 @@ def main():
         if args.zig:
             compiler = [str(args.zig), 'cc']
             obj = temp / 'syntax.m'
-            extra = extract(source, '- (NSError *)ensureDevModeEnabled') + '\n' + extract(source, '- (void)runWithError:')
-            obj.write_text(SYNTAX_PREFIX + wait + '\n@implementation DOJailbreaker\n' + method + '\n' + extra + '\n@end\n', encoding='utf-8')
+            helper = extract(source, 'static int enableDeveloperMode(').replace('jbinfo(', 'jbinfo_devmode(')
+            extra = extract(source, '- (NSError *)ensureDevModeEnabled').replace('jbinfo(', 'jbinfo_devmode(') + '\n' + extract(source, '- (void)runWithError:')
+            syntax_prefix = SYNTAX_PREFIX.replace('extern int enableDeveloperMode(void);', '')
+            obj.write_text(syntax_prefix + wait + '\n' + helper + '\n@implementation DOJailbreaker\n' + method + '\n' + extra + '\n@end\n', encoding='utf-8')
             subprocess.run([str(args.zig), 'clang', '-cc1', '-triple', 'arm64-apple-ios17.0.0',
                             '-x', 'objective-c', '-fobjc-runtime=ios-17.0.0', '-fobjc-arc', '-fblocks',
                             '-fobjc-exceptions', '-DNIGHTLY=1', '-DCOMMIT_HASH="test-sha"', '-Wall', '-Wextra',
@@ -358,7 +374,6 @@ def main():
             fixture_prefix += '''
 #define DISPATCH_SOURCE_TYPE_DATA_ADD NULL
 #define EINVAL 22
-#define ENOENT 2
 #define ECHILD 10
 #define SIGKILL 9
 #define assert(x) ((void)sizeof(x))

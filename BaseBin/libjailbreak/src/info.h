@@ -46,6 +46,8 @@ struct system_info {
 		uint64_t jbrand;
 		uint64_t palera1n;
 		bool dyld_patch_enabled;
+		// Certificate-installed apps need the real AMFI status before injection.
+		bool preserveDeveloperMode;
 	} jailbreakInfo;
 
 	struct {
@@ -420,7 +422,8 @@ extern struct system_info gSystemInfo;
 	iterator(ctx, jailbreakInfo.appIdentifier); \
 	iterator(ctx, jailbreakInfo.jbrand); \
 	iterator(ctx, jailbreakInfo.palera1n); \
-	iterator(ctx, jailbreakInfo.dyld_patch_enabled);
+	iterator(ctx, jailbreakInfo.dyld_patch_enabled); \
+	iterator(ctx, jailbreakInfo.preserveDeveloperMode);
 
 #define JAILBREAK_SETTINGS_ITERATE(ctx, iterator) \
 	iterator(ctx, jailbreakSettings.markAppsAsDebugged); \

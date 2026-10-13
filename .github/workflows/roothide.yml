@@ -211,6 +211,9 @@ jobs:
       - name: RootHide launchd injection failure regressions
         run: python3 .github/scripts/test_launchd_injection.py
 
+      - name: Certificate Developer Mode launch regressions
+        run: python3 .github/scripts/test_developer_mode.py
+
       - name: Certificate firmware acquisition regressions
         run: python3 .github/scripts/test_firmware_images.py
 
