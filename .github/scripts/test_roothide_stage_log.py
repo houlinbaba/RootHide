@@ -126,6 +126,19 @@ int main(int argc, char **argv) {
     read_log(path, buffer, sizeof(buffer));
     assert(!strstr(buffer, "must-not-follow-symlink"));
     assert(unlink(link_path) == 0);
+    // Never truncate a second link to the same inode, or block on a FIFO.
+    assert(link(path, link_path) == 0);
+    errno = EDOM;
+    assert(roothide_stage_begin(link_path, false) == EINVAL && errno == EDOM);
+    roothide_stage_end();
+    roothide_stage_file_log(link_path, "must-not-write-hardlink");
+    read_log(path, buffer, sizeof(buffer));
+    assert(strstr(buffer, "before-abrupt-exit") && !strstr(buffer, "must-not-write-hardlink"));
+    assert(unlink(link_path) == 0);
+    assert(mkfifo(link_path, 0600) == 0);
+    assert(roothide_stage_begin(link_path, false) != 0);
+    roothide_stage_end();
+    assert(unlink(link_path) == 0);
     assert(unlink(service_path) == 0);
     puts("PASS: persists before abrupt exit, append/truncate, errno, opt-in, no inherited fd, no symlink overwrite");
     return 0;
@@ -178,7 +191,7 @@ def main():
         subprocess.run(['cc', '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-D_DARWIN_C_SOURCE', '-Wall', '-Wextra', '-Werror',
                         '-pthread', '-I', str(SOURCE), str(harness), str(SOURCE / 'roothide_stage.c'),
                         '-o', str(binary)], check=True)
-        subprocess.run([str(binary), 'test', str(temp / 'stage.log')], check=True)
+        subprocess.run([str(binary), 'test', str(temp / 'stage.log')], check=True, timeout=20)
 
 
 if __name__ == '__main__':

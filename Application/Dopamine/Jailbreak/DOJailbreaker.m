@@ -822,6 +822,16 @@ static int enableDeveloperMode(void)
     // a distinct attempt so a pre-activation failure cannot leave only old
     // userspace-reboot entries in the exported diagnostics.
     int logResult = roothide_stage_begin([[DOUIManager sharedInstance] rootHideStageLogPath].fileSystemRepresentation, true);
+    NSString *rebootLogPath = [[[[DOUIManager sharedInstance] rootHideStageLogPath] stringByDeletingLastPathComponent]
+                               stringByAppendingPathComponent:@ROOTHIDE_REBOOT_LOG_NAME];
+    int rebootLogResult = roothide_reboot_log_configure(rebootLogPath.fileSystemRepresentation);
+    free(jbinfo(rebootLogPath));
+    jbinfo(rebootLogPath) = rebootLogResult == 0 ? strdup(rebootLogPath.fileSystemRepresentation) : NULL;
+    if (rebootLogResult == 0 && !jbinfo(rebootLogPath)) {
+        rebootLogResult = ENOMEM;
+        roothide_reboot_log_configure(NULL);
+    }
+    roothide_stage_log("reboot_log.prepare result=%d", rebootLogResult);
     struct utsname machine = {0};
     uname(&machine);
     const char *commit = "release";

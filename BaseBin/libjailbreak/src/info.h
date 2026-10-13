@@ -48,6 +48,8 @@ struct system_info {
 		bool dyld_patch_enabled;
 		// Certificate-installed apps need the real AMFI status before injection.
 		bool preserveDeveloperMode;
+		// Ephemeral path to the activating App's private reboot journal.
+		char *rebootLogPath;
 	} jailbreakInfo;
 
 	struct {
@@ -423,7 +425,8 @@ extern struct system_info gSystemInfo;
 	iterator(ctx, jailbreakInfo.jbrand); \
 	iterator(ctx, jailbreakInfo.palera1n); \
 	iterator(ctx, jailbreakInfo.dyld_patch_enabled); \
-	iterator(ctx, jailbreakInfo.preserveDeveloperMode);
+	iterator(ctx, jailbreakInfo.preserveDeveloperMode); \
+	iterator(ctx, jailbreakInfo.rebootLogPath);
 
 #define JAILBREAK_SETTINGS_ITERATE(ctx, iterator) \
 	iterator(ctx, jailbreakSettings.markAppsAsDebugged); \

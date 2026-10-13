@@ -3,6 +3,7 @@
 #import <libjailbreak/util.h>
 #import <libjailbreak/kernel.h>
 #import <libjailbreak/display.h>
+#import <libjailbreak/roothide_stage.h>
 #import <mach-o/dyld.h>
 #import <os/alloc_once_private.h>
 #import <dlfcn.h>
@@ -62,6 +63,8 @@ void draw_boot_logo(const char *bootLogoPath)
 int (*sysctlbyname_orig)(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen) = NULL;
 int sysctlbyname_hook(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen)
 {
+    bool rebootRequest = name && !strcmp(name, "kern.willuserspacereboot");
+    if (rebootRequest) roothide_reboot_log("reboot.sysctl.begin");
 /*********************** roothide specific ********************/
 #ifdef __arm64e__
 	if (!roothide_is_ios16_or_newer())
@@ -76,17 +79,23 @@ int sysctlbyname_hook(const char *name, void *oldp, size_t *oldlenp, void *newp,
 
 	int r = sysctlbyname_orig(name, oldp, oldlenp, newp, newlen);
 	if (!strcmp(name, "kern.willuserspacereboot")) {
+		roothide_reboot_log("reboot.sysctl.end result=%d", r);
+		roothide_reboot_log("reboot.boot_logo.begin");
 		draw_boot_logo(JBROOT_PATH("/basebin/bootlogo.jp2"));
+		roothide_reboot_log("reboot.boot_logo.end");
 	}
 	return r;
 }
 
 __attribute__((constructor)) static void initializer(void)
 {
+	roothide_reboot_log("launchd.initialize.begin previous_session=%d", getenv("DOPAMINE_INITIALIZED") != NULL);
 	crashreporter_start();
+	roothide_reboot_log("launchd.crashreporter.end");
 
 /********** roothide specfic ********/
 	roothide_launchd_preinit();
+	roothide_reboot_log("launchd.preinit.end");
 /********** roothide specfic ********/
 
 	// Retrieve jbroot path early based on our dylib path (<JBROOT>/basebin/launchd) so we can use JBROOT_PATH before boomerang_recoverPrimitives
@@ -133,7 +142,9 @@ __attribute__((constructor)) static void initializer(void)
 		firstLoad = true;
 	}
 
+	roothide_reboot_log("launchd.recover.begin first_load=%d", firstLoad);
 	int err = boomerang_recoverPrimitives(firstLoad, true);
+	roothide_reboot_log("launchd.recover.end result=%d first_load=%d", err, firstLoad);
 	if (err != 0) {
 		char msg[1000];
 		snprintf(msg, 1000, "Dopamine: Failed to recover primitives (error %d), cannot continue.", err);
@@ -148,6 +159,7 @@ __attribute__((constructor)) static void initializer(void)
 	}
 
 	cs_allow_invalid(proc_self(), false);
+	roothide_reboot_log("launchd.hooks.begin");
 
 	initXPCHooks();
 	initDaemonHooks();
@@ -155,6 +167,7 @@ __attribute__((constructor)) static void initializer(void)
 	initIPCHooks();
 	initJetsamHook();
 	MSHookFunction((void *)sysctlbyname, (void *)sysctlbyname_hook, (void **)&sysctlbyname_orig);
+	roothide_reboot_log("launchd.hooks.end");
 
 /*
 	if (getenv("DOPAMINE_IS_HIDDEN") != 0) {
@@ -187,6 +200,9 @@ __attribute__((constructor)) static void initializer(void)
 	setenv("LAUNCHD_UUID", [NSUUID UUID].UUIDString.UTF8String, 1);
 
 /********** roothide specfic ********/
+roothide_reboot_log("launchd.postinit.begin first_load=%d", firstLoad);
 roothide_launchd_postinit(firstLoad);
+roothide_reboot_log("launchd.postinit.end first_load=%d", firstLoad);
 /********** roothide specfic ********/
+	roothide_reboot_log("launchd.initialize.end first_load=%d", firstLoad);
 }

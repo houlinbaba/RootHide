@@ -140,7 +140,7 @@ assert "waitpid(pid, &status, WNOHANG)" in respawn_delayed_reaper
 assert "retriesRemaining > 0" in respawn_delayed_reaper
 assert "errno != ESRCH" in respawn_cleanup
 bootstrap_start = source.index("int spawnJailbreakd()")
-bootstrap_end = source.index("	pid_t pid;", bootstrap_start)
+bootstrap_end = source.index("	pid_t pid = 0;", bootstrap_start)
 bootstrap_setup_source = source[bootstrap_start:bootstrap_end]
 assert "if (!bootstrapReady)" in bootstrap_setup_source
 assert "dispatch_once" not in bootstrap_setup_source

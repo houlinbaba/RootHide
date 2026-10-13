@@ -272,7 +272,9 @@
     NSString *header = [NSString stringWithFormat:@"App: %@ (%@)\nDevice: %s / iOS %@\nuid=%u euid=%u",
         [self getLaunchedReleaseTag], commit,
         machine.machine, UIDevice.currentDevice.systemVersion, (unsigned)getuid(), (unsigned)geteuid()];
-    NSArray *logs = @[[self rootHideStageLogPath], @ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+    NSString *rebootLogPath = [[[self rootHideStageLogPath] stringByDeletingLastPathComponent]
+                              stringByAppendingPathComponent:@ROOTHIDE_REBOOT_LOG_NAME];
+    NSArray *logs = @[[self rootHideStageLogPath], rebootLogPath, @ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
         @ROOTHIDE_BOOTSTRAP_STAGE_LOG_PATH, @"/var/mobile/Library/Logs/CrashReporter/Dopamine-systemhook-init.log",
         @"/var/mobile/Library/Logs/CrashReporter/Dopamine-app-startup-0.log",
         @"/var/mobile/Library/Logs/CrashReporter/Dopamine-app-startup-501.log"];

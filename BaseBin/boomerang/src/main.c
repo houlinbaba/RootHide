@@ -10,9 +10,11 @@
 #include <libjailbreak/stock_fixes.h>
 
 #include <libjailbreak/roothider.h>
+#include <libjailbreak/roothide_stage.h>
 
 int main(int argc, char* argv[])
 {
+	roothide_reboot_log("boomerang.start");
 	crashreporter_start();
 	JBLogDebug("Boomerang started");
 
@@ -49,23 +51,32 @@ int main(int argc, char* argv[])
 
 	// Acquire the primitives before replacing launchd's registered port. An
 	// unsuccessful recovery must not advertise a helper that cannot serve it.
-	if (jbclient_initialize_primitives_internal(false) != 0) return -1;
+	int primitivesResult = jbclient_initialize_primitives_internal(false);
+	roothide_reboot_log("boomerang.primitives.end result=%d", primitivesResult);
+	if (primitivesResult != 0) return -1;
 
 	// Stash our server port inside launchd's registeredPorts[2]
 	task_t launchdTaskPort = MACH_PORT_NULL;
 	kern_return_t kr = task_for_pid(mach_task_self(), 1, &launchdTaskPort);
+	roothide_reboot_log("boomerang.launchd_task.end result=%d valid_port=%d", kr, launchdTaskPort != MACH_PORT_NULL);
 	if (kr != KERN_SUCCESS || launchdTaskPort == MACH_PORT_NULL) return -1;
 	kr = mach_ports_register(launchdTaskPort, (mach_port_t[]){ MACH_PORT_NULL, MACH_PORT_NULL, serverPort }, 3);
+	roothide_reboot_log("boomerang.register_launchd.end result=%d", kr);
 	if (kr != KERN_SUCCESS) return -1;
 	mach_port_deallocate(mach_task_self(), launchdTaskPort);
 
 	// Send done message to launchd
-	if (jbclient_boomerang_done() != 0) return -1;
+	int doneResult = jbclient_boomerang_done();
+	roothide_reboot_log("boomerang.stash_done.end result=%d", doneResult);
+	if (doneResult != 0) return -1;
 
 
 /******************* roothide specific **********************/
 // patch new launchd process
-if(unrestrict(1, roothide_patch_proc, true) != 0) {
+roothide_reboot_log("boomerang.patch_launchd.begin");
+int patchResult = unrestrict(1, roothide_patch_proc, true);
+roothide_reboot_log("boomerang.patch_launchd.end result=%d", patchResult);
+if(patchResult != 0) {
 	JBLogError("Failed to unrestrict launchd");
 	return -1;
 }
@@ -73,6 +84,7 @@ if(unrestrict(1, roothide_patch_proc, true) != 0) {
 
 
 	// Now make our server run so that launchd can get everything back
+	roothide_reboot_log("boomerang.server.begin");
 	dispatch_main();
 	return 0;
 }

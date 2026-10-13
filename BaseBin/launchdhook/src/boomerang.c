@@ -7,6 +7,7 @@
 #include <libjailbreak/primitives_IOSurface.h>
 #include <libjailbreak/kcall_Fugu14.h>
 #include <libjailbreak/kcall_arm64.h>
+#include <libjailbreak/roothide_stage.h>
 #include <unistd.h>
 #include <errno.h>
 #include <sys/wait.h>
@@ -21,6 +22,7 @@ int posix_spawnattr_set_registered_ports_np(posix_spawnattr_t *__restrict attr, 
 
 int boomerang_stashPrimitives()
 {
+	roothide_reboot_log("handoff.stash.begin");
 	dispatch_semaphore_t boomerangDone = dispatch_semaphore_create(0);
 	dispatch_semaphore_t serverStopped = dispatch_semaphore_create(0);
 	// launchd can execute this hook on its main queue. Its synchronous wait
@@ -48,7 +50,12 @@ int boomerang_stashPrimitives()
 		if (handoffComplete) return;
 		xpc_object_t xdict = NULL;
 		if (!xpc_pipe_receive(serverPort, &xdict) && xdict) {
-			if (jbserver_received_boomerang_xpc_message(&gBoomerangServer, xdict) == JBS_BOOMERANG_DONE) {
+			bool isDictionary = xpc_get_type(xdict) == XPC_TYPE_DICTIONARY;
+			roothide_reboot_log("handoff.stash.dispatch.begin action=%llu",
+			                   (unsigned long long)(isDictionary ? xpc_dictionary_get_uint64(xdict, "action") : 0));
+			int handled = jbserver_received_boomerang_xpc_message(&gBoomerangServer, xdict);
+			roothide_reboot_log("handoff.stash.dispatch.end result=%d", handled);
+			if (handled == JBS_BOOMERANG_DONE) {
 				handoffComplete = true;
 				dispatch_semaphore_signal(boomerangDone);
 			}
@@ -74,6 +81,7 @@ int boomerang_stashPrimitives()
 			char *argv[] = { (char *)path, NULL };
 			char *envp[] = { NULL };
 			result = posix_spawn(&boomerangPid, path, NULL, &attr, argv, envp);
+			roothide_reboot_log("handoff.stash.spawn.end result=%d pid=%d", result, boomerangPid);
 		}
 		posix_spawnattr_destroy(&attr);
 	}
@@ -96,7 +104,9 @@ int boomerang_stashPrimitives()
 		}
 	}
 	dispatch_source_cancel(serverSource);
+	roothide_reboot_log("handoff.stash.cancel.begin result=%d", result);
 	dispatch_semaphore_wait(serverStopped, DISPATCH_TIME_FOREVER);
+	roothide_reboot_log("handoff.stash.cancel.end result=%d", result);
 	if (result != 0) {
 		if (boomerangPid > 1) {
 			kill(boomerangPid, SIGKILL);
@@ -114,16 +124,20 @@ int boomerang_stashPrimitives()
 		waitpid(boomerangPid, NULL, WNOHANG);
 		return environmentError;
 	}
+	roothide_reboot_log("handoff.stash.end result=0 pid=%d", boomerangPid);
 	return 0;
 }
 
 int boomerang_recoverPrimitives(bool firstRetrieval, bool shouldEndBoomerang)
 {
+	roothide_reboot_log("handoff.recover.begin first_retrieval=%d end_helper=%d", firstRetrieval, shouldEndBoomerang);
 	// Mach port to boomerang should be stored in our registeredPorts[2]
 	// Use it to recover primitives, afterwards replace it with MACH_PORT_NULL to make launchd happy
 	mach_port_t *registeredPorts;
 	mach_msg_type_number_t registeredPortsCount = 0;
-	if (mach_ports_lookup(mach_task_self(), &registeredPorts, &registeredPortsCount) != 0 || registeredPortsCount < 3) return -1;
+	kern_return_t lookupResult = mach_ports_lookup(mach_task_self(), &registeredPorts, &registeredPortsCount);
+	roothide_reboot_log("handoff.recover.lookup.end result=%d count=%u", lookupResult, registeredPortsCount);
+	if (lookupResult != 0 || registeredPortsCount < 3) return -1;
 	mach_port_t boomerangPort = registeredPorts[2];
 	if (boomerangPort == MACH_PORT_NULL) return -2;
 	jbclient_xpc_set_custom_port(boomerangPort);
@@ -144,11 +158,13 @@ int boomerang_recoverPrimitives(bool firstRetrieval, bool shouldEndBoomerang)
 	// But from launchd it's generally fine, no clue why
 	bool physrwPTE = firstRetrieval && !is_kcall_available();
 	int result = jbclient_initialize_primitives_internal(physrwPTE);
+	roothide_reboot_log("handoff.recover.primitives.end result=%d single_pte=%d", result, physrwPTE);
 	if (result != 0) return result;
 
 	if (shouldEndBoomerang) {
 		// Send done message to boomerang
 		result = jbclient_boomerang_done();
+		roothide_reboot_log("handoff.recover.done.end result=%d", result);
 		if (result != 0) return result;
 
 		// Remove boomerang zombie proc if needed
@@ -160,5 +176,6 @@ int boomerang_recoverPrimitives(bool firstRetrieval, bool shouldEndBoomerang)
 		}
 	}
 
+	roothide_reboot_log("handoff.recover.end result=0");
 	return 0;
 }

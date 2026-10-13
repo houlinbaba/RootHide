@@ -21,6 +21,8 @@ int jbclient_initialize_primitives_internal(bool physrwPTE)
 	if (sysinfoResult == 0) {
 		roothide_stage_log("primitives.deserialize.begin");
 		SYSTEM_INFO_DESERIALIZE(xSystemInfo);
+		int logResult = roothide_reboot_log_configure(jbinfo(rebootLogPath));
+		roothide_stage_log("primitives.reboot_log.configure result=%d", logResult);
 		roothide_stage_log("primitives.deserialize.end");
 		xpc_release(xSystemInfo);
 		uint64_t asidPtr = 0;

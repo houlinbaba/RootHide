@@ -212,6 +212,8 @@ extern int errno;
 __attribute__((objc_root_class)) @interface NSObject @end
 @interface NSString : NSObject
 + (instancetype)stringWithFormat:(NSString *)format, ...;
+- (NSString *)stringByDeletingLastPathComponent;
+- (NSString *)stringByAppendingPathComponent:(NSString *)component;
 @property (readonly) const char *UTF8String;
 @property (readonly) const char *fileSystemRepresentation;
 @end
@@ -283,6 +285,13 @@ struct utsname { char machine[256]; };
 extern int uname(struct utsname *);
 extern int roothide_stage_begin(const char *, BOOL);
 extern void roothide_stage_end(void);
+extern void roothide_reboot_log(const char *, ...) __attribute__((format(printf, 1, 2)));
+extern int roothide_reboot_log_configure(const char *);
+extern void free(void *);
+extern char *strdup(const char *);
+extern char *testRebootLogPath;
+#define ROOTHIDE_REBOOT_LOG_NAME "RootHideReboot.log"
+#define ENOMEM 12
 typedef unsigned long long uint64_t;
 typedef unsigned char uint8_t;
 typedef unsigned long size_t;
@@ -345,7 +354,8 @@ def main():
             compiler = [str(args.zig), 'cc']
             obj = temp / 'syntax.m'
             helper = extract(source, 'static int enableDeveloperMode(').replace('jbinfo(', 'jbinfo_devmode(')
-            extra = extract(source, '- (NSError *)ensureDevModeEnabled').replace('jbinfo(', 'jbinfo_devmode(') + '\n' + extract(source, '- (void)runWithError:')
+            wrapper = extract(source, '- (void)runWithError:').replace('jbinfo(rebootLogPath)', 'testRebootLogPath')
+            extra = extract(source, '- (NSError *)ensureDevModeEnabled').replace('jbinfo(', 'jbinfo_devmode(') + '\n' + wrapper
             syntax_prefix = SYNTAX_PREFIX.replace('extern int enableDeveloperMode(void);', '')
             obj.write_text(syntax_prefix + wait + '\n' + helper + '\n@implementation DOJailbreaker\n' + method + '\n' + extra + '\n@end\n', encoding='utf-8')
             subprocess.run([str(args.zig), 'clang', '-cc1', '-triple', 'arm64-apple-ios17.0.0',

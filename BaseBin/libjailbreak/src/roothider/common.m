@@ -149,6 +149,7 @@ int proc_paused(pid_t pid, bool* paused)
 
 int unrestrict(pid_t pid, int (*callback)(pid_t), bool resume)
 {
+	roothide_reboot_log("process.unrestrict.begin target=%d resume=%d", pid, resume);
 	while(true) {
 		bool paused = false;
 		if (proc_paused(pid, &paused) != 0) {
@@ -162,15 +163,25 @@ int unrestrict(pid_t pid, int (*callback)(pid_t), bool resume)
 		}
         usleep(10*1000);
 	}
+	roothide_reboot_log("process.unrestrict.paused target=%d", pid);
 
     int ret = callback(pid);
+    roothide_reboot_log("process.unrestrict.patch.end target=%d result=%d", pid, ret);
     if(ret != 0) {
         JBLogError("Failed to invoke callback for process %d: %d", pid, ret);
         return ret;
     }
 
-    if (resume)
-        kill(pid, SIGCONT);
+    if (resume) {
+        int resumeResult = kill(pid, SIGCONT);
+        int resumeError = resumeResult != 0 ? errno : 0;
+        roothide_reboot_log("process.unrestrict.resume.end target=%d result=%d errno=%d", pid, resumeResult, resumeError);
+        if (resumeResult != 0) {
+            JBLogError("Failed to resume unrestricted process %d: errno=%d", pid, resumeError);
+            errno = resumeError;
+            return -1;
+        }
+    }
 
     JBLogDebug("Unrestricted process %s pid:%d resume:%d", proc_get_path(pid,NULL), pid, resume);
     return 0;

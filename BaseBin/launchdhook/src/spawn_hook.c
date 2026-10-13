@@ -5,6 +5,7 @@
 #include "crashreporter.h"
 #include "update.h"
 #include <libjailbreak/util.h>
+#include <libjailbreak/roothide_stage.h>
 #include <substrate.h>
 #include <mach-o/dyld.h>
 #include <sys/param.h>
@@ -91,6 +92,7 @@ int __posix_spawn_hook(pid_t *restrict pid, const char *restrict path,
 		uint32_t bufsize = sizeof(executablePath);
 		_NSGetExecutablePath(&executablePath[0], &bufsize);
 		if (!strcmp(path, executablePath)) {
+			roothide_reboot_log("launchd.reexec.begin");
 			// This spawn will perform a userspace reboot...
 			// Instead of the ordinary hook, we want to reinsert this dylib
 			// This has already been done in envp so we only need to call the original posix_spawn
@@ -112,6 +114,7 @@ int __posix_spawn_hook(pid_t *restrict pid, const char *restrict path,
 
 			// Before the userspace reboot, we want to stash the primitives into boomerang
 			int handoffResult = boomerang_stashPrimitives();
+			roothide_reboot_log("launchd.reexec.stash.end result=%d", handoffResult);
 			if (handoffResult != 0) {
 				gInEarlyBoot = wasInEarlyBoot;
 				JBLogError("Failed to stash userspace reboot primitives: %d", handoffResult);
@@ -142,7 +145,11 @@ int __posix_spawn_hook(pid_t *restrict pid, const char *restrict path,
 			// setenv / unsetenv can sometimes cause environ to get reallocated
 			// In that case envp may point to garbage or be empty
 			// Say goodbye to this process
-			return __posix_spawn_orig_wrapper(pid, path, desc, argv, environ);
+			roothide_reboot_log("launchd.reexec.setexec.begin");
+			int execResult = __posix_spawn_orig_wrapper(pid, path, desc, argv, environ);
+			roothide_reboot_log("launchd.reexec.setexec.return result=%d", execResult);
+			gInEarlyBoot = wasInEarlyBoot;
+			return execResult;
 		}
 	}
 
@@ -190,6 +197,7 @@ int __posix_spawn_hook(pid_t *restrict pid, const char *restrict path,
 			// The spawned process being xpcproxy indicates that the launchd XPC server is up
 			// All processes spawned including this one should be injected into
 			early_boot_done();
+			roothide_reboot_log("launchd.early_boot.end first_xpcproxy=1");
 		}
 		else {
 			return __posix_spawn_orig_wrapper(pid, path, desc, argv, envp);

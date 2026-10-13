@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_launchd_injection import extract, SYNTAX_PREFIX
 
 DARWIN_MOCKS = r'''
+static void roothide_reboot_log(const char *format, ...) { (void)format; }
 #define JBROOT_PATH(p) p
 #define JBS_BOOMERANG_DONE 42
 static int gBoomerangServer;
@@ -124,6 +125,8 @@ RECOVERY_PREFIX = r'''
 #include <stdlib.h>
 #include <stdio.h>
 typedef int pid_t;
+typedef int kern_return_t;
+static void roothide_reboot_log(const char *format, ...) { (void)format; }
 typedef unsigned mach_port_t, mach_msg_type_number_t;
 #define MACH_PORT_NULL 0
 #ifndef WNOHANG
@@ -177,8 +180,9 @@ def main():
     stash = extract(source, 'int boomerang_stashPrimitives()')
     recover = extract(source, 'int boomerang_recoverPrimitives(')
     helper = (ROOT / 'BaseBin/boomerang/src/main.c').read_text(encoding='utf-8')
-    assert helper.index('if (jbclient_initialize_primitives_internal(false) != 0)') < helper.index('kr = mach_ports_register(launchdTaskPort')
-    assert 'if (jbclient_boomerang_done() != 0) return -1;' in helper
+    assert helper.index('if (primitivesResult != 0) return -1;') < helper.index('kr = mach_ports_register(launchdTaskPort')
+    assert 'int primitivesResult = jbclient_initialize_primitives_internal(false);' in helper
+    assert 'int doneResult = jbclient_boomerang_done();' in helper and 'if (doneResult != 0) return -1;' in helper
     hook = (ROOT / 'BaseBin/launchdhook/src/spawn_hook.c').read_text(encoding='utf-8')
     assert 'gInEarlyBoot = wasInEarlyBoot;' in hook and 'return handoffResult;' in hook
     context = nullcontext(args.workdir.resolve()) if args.workdir else tempfile.TemporaryDirectory(prefix='boomerang-')
@@ -208,6 +212,11 @@ def main():
 static int gBoomerangServer;
 typedef _Bool bool;
 #define false 0
+typedef const void *xpc_type_t;
+extern xpc_type_t xpc_get_type(xpc_object_t);
+extern const struct _xpc_type_s _xpc_type_dictionary;
+#define XPC_TYPE_DICTIONARY (&_xpc_type_dictionary)
+extern unsigned long long xpc_dictionary_get_uint64(xpc_object_t, const char *);
 extern void xpc_release(xpc_object_t);
 extern int kill(pid_t, int);
 extern int snprintf(char *, unsigned long, const char *, ...);

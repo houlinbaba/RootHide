@@ -749,6 +749,7 @@ static kern_return_t prepareJailbreakdBootstrapPort(mach_port_t *bootstrapPort)
 
 int spawnJailbreakd()
 {
+	roothide_reboot_log("jailbreakd.spawn.begin first_load=%d", __firstLoad);
 	if (getpid() != 1) {
 		JBLogError("spawnJailbreakd called outside launchd: pid=%d", getpid());
 		return -1;
@@ -840,7 +841,7 @@ int spawnJailbreakd()
 	}
 
 
-	pid_t pid;
+	pid_t pid = 0;
 	posix_spawnattr_t attr = NULL;
 	int attrResult = posix_spawnattr_init(&attr);
 	if (attrResult != 0) {
@@ -900,6 +901,7 @@ int spawnJailbreakd()
 	spawnEnvironment[environmentIndex] = NULL;
 	int ret = posix_spawn(&pid, JBROOT_PATH("/basebin/jailbreakd"), NULL, &attr,
 	                      (char*[]){"jailbreakd",NULL}, spawnEnvironment);
+	roothide_reboot_log("jailbreakd.spawn.end result=%d pid=%d", ret, pid);
 	free(spawnEnvironment);
 	posix_spawnattr_destroy(&attr);
 
@@ -929,10 +931,13 @@ int spawnJailbreakd()
 	}
 
 	setJailbreakdProcess(pid);
+	roothide_reboot_log("jailbreakd.spawn.publish.end pid=%d generation=%llu", pid, (unsigned long long)candidateGeneration);
 	/* here we can't wait for jailbreakd to initialize since opainject will suspend all other threads */
 	scheduleJailbreakdServerPortCheckinWatchdog();
-	if (kill(pid, SIGCONT) != 0) {
-		int resumeError = errno;
+	int resumeResult = kill(pid, SIGCONT);
+	int resumeError = resumeResult != 0 ? errno : 0;
+	roothide_reboot_log("jailbreakd.spawn.resume.end pid=%d result=%d errno=%d", pid, resumeResult, resumeError);
+	if (resumeResult != 0) {
 		jailbreakd_checkin_ticket_t ticket = {
 			.pid = pid,
 			.generation = candidateGeneration,
