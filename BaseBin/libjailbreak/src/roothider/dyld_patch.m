@@ -3,12 +3,14 @@
 #include <stdio.h>
 #include <dlfcn.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <sys/stat.h>
 #include <mach-o/dyld.h>
 #include <mach-o/dyld_images.h>
 #include <CoreSymbolication.h>
 
 #include "../libjailbreak.h"
+#include "../roothide_stage.h"
 #include "common.h"
 #include "log.h"
 
@@ -99,66 +101,90 @@ void patchedtest(mach_port_t task, uint64_t remoteLoadAddress)
 int task_set_dyld_info(uint64_t task, uint64_t addr, uint64_t size)
 {
     static uint32_t all_image_info_addr_offset=0, all_image_info_size_offset=0, info_offset=0;
+    static pthread_mutex_t offsetsLock = PTHREAD_MUTEX_INITIALIZER;
+    int result = 0;
+    const char *phase = "arguments";
+    if (!task || !addr || !size) {
+        roothide_stage_log("dyld.metadata.end phase=%s result=-1", phase);
+        return -1;
+    }
+    roothide_stage_log("dyld.metadata.begin");
+    result = pthread_mutex_lock(&offsetsLock);
+    if (result != 0) {
+        roothide_stage_log("dyld.metadata.end phase=lock result=%d", result);
+        return result;
+    }
 
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
+    // Publish only successfully discovered offsets. A temporary read failure
+    // must remain retryable rather than permanently completing dispatch_once.
+    if (!all_image_info_addr_offset || !all_image_info_size_offset) {
         task_dyld_info_data_t dyldInfo={0};
         uint32_t count = TASK_DYLD_INFO_COUNT;
+        phase = "self_task_info";
         kern_return_t kr = task_info(mach_task_self(), TASK_DYLD_INFO, (task_info_t)&dyldInfo, &count);
-        if(kr != KERN_SUCCESS) {
-            JBLogError("task_info failed: %d,%s", kr, mach_error_string(kr));
-            return;
+        if (kr != KERN_SUCCESS || count < TASK_DYLD_INFO_COUNT ||
+            !dyldInfo.all_image_info_addr || !dyldInfo.all_image_info_size) {
+            result = kr != KERN_SUCCESS ? kr : -1;
+            goto out;
         }
-        JBLogDebug("task_set_dyld_info: all_image_info_addr=%p", (void*)dyldInfo.all_image_info_addr);
-        JBLogDebug("task_set_dyld_info: all_image_info_size=%p", (void*)dyldInfo.all_image_info_size);
-    
+        phase = "self_task";
         uint64_t selftask = task_self();
-        JBLogDebug("task_set_dyld_info: selftask=%llx", selftask);
-
-        int i=0;
-        for(; i<DYLD_INFO_MAX_SEARCH_INDEX; i++) 
-        {
-            if(kread64(selftask + i*8)==dyldInfo.all_image_info_addr
-             && kread64(selftask + (i+1)*8)==dyldInfo.all_image_info_size) {
-                JBLogDebug("task_set_dyld_info: all_image_info_addr offset=[%d]0x%x", i, i*8 );
-                JBLogDebug("task_set_dyld_info: all_image_info_size offset=[%d]0x%x", i+1, (i+1)*8 );
-                
+        if (!selftask) { result = -1; goto out; }
+        phase = "address_offsets_read";
+        for (uint32_t i = 1; i < DYLD_INFO_MAX_SEARCH_INDEX; i++) {
+            uint64_t pair[2] = {0};
+            result = kreadbuf(selftask + i*8, pair, sizeof(pair));
+            if (result != 0) goto out;
+            if (pair[0] == dyldInfo.all_image_info_addr && pair[1] == dyldInfo.all_image_info_size) {
                 all_image_info_addr_offset = i*8;
                 all_image_info_size_offset = (i+1)*8;
-
                 break;
             }
         }
-        for(; i<(DYLD_INFO_MAX_SEARCH_INDEX+0); i++) {
+        if (!all_image_info_addr_offset || !all_image_info_size_offset) {
+            phase = "address_offsets_missing";
+            result = -1;
+            goto out;
+        }
+    }
+
+    if (!info_offset) {
+        phase = "metadata_offset_read";
+        for (uint32_t i = all_image_info_addr_offset/8; i < DYLD_INFO_MAX_SEARCH_INDEX; i++) {
             uint64_t info[6] = {1,0,0,0,1,0};
             uint8_t buffer[sizeof(info)] = {0};
-            kreadbuf(task + i*8, buffer, sizeof(buffer));
+            result = kreadbuf(task + i*8, buffer, sizeof(buffer));
+            if (result != 0) goto out;
             if(memcmp(buffer, info, sizeof(info))==0) {
-                JBLogDebug("task_set_dyld_info: info offset=[%d]0x%x\n", i, i*8);
                 info_offset = i*8;
                 break;
             }
         }
-    });
-
-    if(all_image_info_addr_offset==0 || all_image_info_size_offset==0) {
-        JBLogError("invalid all_image_info_addr/size offset");
-        abort();
-        return -1;
     }
 
     if(info_offset) {
+        phase = "metadata_clear";
         uint64_t info[6] = {0};
-        kwritebuf(task + info_offset, info, sizeof(info));
-    } else if(task != proc_task(proc_find(1))) {
-        JBLogError("invalid info offset");
-        abort();
-        return -1;
+        result = kwritebuf(task + info_offset, info, sizeof(info));
+        if (result != 0) goto out;
+    } else {
+        // Preserve the existing launchd exception; other targets must have
+        // the metadata location before any kernel writes are attempted.
+        phase = "metadata_offset_missing";
+        uint64_t launchdProc = proc_find(1);
+        uint64_t launchdTask = launchdProc ? proc_task(launchdProc) : 0;
+        if (!launchdTask || task != launchdTask) { result = -1; goto out; }
     }
 
-    kwrite64(task + all_image_info_addr_offset, addr);
-    kwrite64(task + all_image_info_size_offset, size);
-    return 0;
+    phase = "address_write";
+    result = kwrite64(task + all_image_info_addr_offset, addr);
+    if (result != 0) goto out;
+    phase = "size_write";
+    result = kwrite64(task + all_image_info_size_offset, size);
+out:
+    pthread_mutex_unlock(&offsetsLock);
+    roothide_stage_log("dyld.metadata.end phase=%s result=%d", phase, result);
+    return result;
 }
 
 void analyzeSegmentsLayout(struct mach_header_64* header, uint64_t* vmSpace, bool* hasZeroFill)
@@ -710,7 +736,7 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
         kr = thread_get_state(allThreads[i], ARM_THREAD_STATE64, (thread_state_t)&threadState, &threadStateCount);
         if(kr != KERN_SUCCESS) {
             JBLogError("thread_get_state %d,%s", kr, mach_error_string(kr));
-            goto failed;
+            goto reentry_end;
         }
 
         arm_thread_state64_t strippedState = threadState; /* some process such as WebContent used a different pac key
@@ -726,6 +752,25 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
         if(strippedPC == dyld_entry)
         {
             JBLogDebug("dyld entrypoint found in thread[%d]:%x", i, allThreads[i]);
+
+            // launchd lacks the thread-set-state entitlement on iOS 17.
+            // Keep its core registers intact. The signed jailbreakd and
+            // boomerang helpers have that entitlement and retain the original
+            // thread-state path, including removal of the old dyld mapping.
+            if (__builtin_available(iOS 17.0, *)) {
+                if (getpid() == 1) {
+                    cs_allow_invalid(bsd_proc, false);
+                    int redirectResult = hook_dyld_entry(task, dyld_address, dyld_entry, (uint64_t)new_entry);
+                    roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+                        "dyld.entry.redirect caller=1 pid=%d mode=trampoline result=%d", pid, redirectResult);
+                    if (redirectResult != 0) {
+                        JBLogError("hook_dyld_entry failed");
+                        goto reentry_end;
+                    }
+                    reentry = true;
+                    break;
+                }
+            }
 
 #ifdef __arm64e__
             void* savedPC = threadState.__opaque_pc;
@@ -750,6 +795,7 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
             new_entry = ptrauth_sign_unauthenticated(new_entry, ptrauth_key_process_independent_code, 0);
 #endif
             __darwin_arm_thread_state64_set_pc_fptr(threadState, new_entry);
+            roothide_stage_log("dyld.entry.redirect caller=%d pid=%d mode=thread_state", getpid(), pid);
             kr = thread_set_state(allThreads[i], ARM_THREAD_STATE64, (thread_state_t)&threadState, threadStateCount);
             if(kr != KERN_SUCCESS) {
                 JBLogError("thread_set_state failed: %d,%s", kr, mach_error_string(kr));

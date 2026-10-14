@@ -205,6 +205,12 @@ jobs:
       - name: RootHide persistent stage log regressions
         run: python3 .github/scripts/test_roothide_stage_log.py
 
+      - name: RootHide dyld caller routing regressions
+        run: python3 .github/scripts/test_dyld_entry_redirect.py
+
+      - name: RootHide dyld metadata failure and respawn cleanup regressions
+        run: python3 .github/scripts/test_dyld_metadata.py
+
       - name: RootHide diagnostic export regressions
         run: python3 .github/scripts/test_roothide_diagnostic_export.py
 
