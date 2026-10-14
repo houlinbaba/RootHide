@@ -235,6 +235,9 @@ jobs:
       - name: RootHide dyld entry guard regressions
         run: python3 .github/scripts/test_dyld_entry_redirect.py
 
+      - name: RootHide dyld metadata failure and respawn cleanup regressions
+        run: python3 .github/scripts/test_dyld_metadata.py
+
       - name: Certificate firmware acquisition regressions
         run: python3 .github/scripts/test_firmware_images.py
 
