@@ -9,6 +9,7 @@ from contextlib import nullcontext
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 from test_dyld_entry_redirect import extract
 
@@ -31,7 +32,9 @@ PREFIX = r'''
 #define TASK_DYLD_INFO_COUNT 5
 #define SIGKILL 9
 #define SIGCONT 19
+#ifndef WNOHANG
 #define WNOHANG 1
+#endif
 typedef void *task_info_t;
 typedef int kern_return_t;
 typedef struct { uint64_t all_image_info_addr, all_image_info_size; } task_dyld_info_data_t;
@@ -89,9 +92,12 @@ static int kill(pid_t pid,int sig) {
     if(sig==SIGKILL){kills++;return 0;}
     assert(sig==SIGCONT);resumes++;if(fail_resume){errno=ESRCH;return -1;}return 0;
 }
-static pid_t waitpid(pid_t pid,int *status,int options) {
+static pid_t mock_waitpid(pid_t pid,int *status,int options) {
     assert(pid==520 && status && options==WNOHANG);reaps++;return pid;
 }
+/* Darwin headers may already declare waitpid. Replace only the calls in the
+ * production cleanup below, without redeclaring the system function. */
+#define waitpid mock_waitpid
 static void scheduleRespawnedJailbreakdChildReap(pid_t pid,unsigned int n) {
     assert(pid==520 && n==20);deferred_reaps++;
 }
@@ -209,6 +215,14 @@ def main():
         for mode in modes:
             subprocess.run([str(binary), mode], check=True, timeout=10)
         print(f'PASS: {len(modes)} production metadata/parent cases; retries, exact write errors, child cleanup, no resume on patch failure')
+        if args.zig and sys.platform != 'darwin':
+            # Zig supplies Darwin headers: catch SDK declarations/macros even
+            # when the host model is executed on Windows or Linux.
+            for target in ['aarch64-macos', 'x86_64-macos']:
+                object_file = temp / f'dyld_metadata-{target}.o'
+                subprocess.run(compiler + ['-target', target] + flags +
+                               ['-c', str(harness), '-o', str(object_file)], check=True)
+            print('PASS: metadata harness compiles against Darwin headers for both Mac targets')
         broken = updater.replace('return result;', 'return 0;')
         assert broken != updater
         harness.write_text(harness_source.replace(updater, broken), encoding='utf-8')
