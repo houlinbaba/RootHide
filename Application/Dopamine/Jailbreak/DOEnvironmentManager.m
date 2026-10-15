@@ -1371,6 +1371,9 @@ static BOOL DOPackageManagerBundleInvalidIsReinstallable(NSString *displayName, 
 
 - (void)reboot
 {
+    // An unprivileged caller needs the active jailbreak server. Keep the
+    // existing route available to callers already running as root.
+    if ((geteuid() != 0 || getegid() != 0) && ![self isJailbroken]) return;
     [self runAsRoot:^{
         [self runUnsandboxed:^{
             reboot3(0x8000000000000000, 0);

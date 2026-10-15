@@ -2148,9 +2148,11 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
             [[DOEnvironmentManager sharedManager] rebootUserspace];
         }],
         [UIAction actionWithTitle:DOLocalizedString(@"Menu_Reboot_Device_Title") image:[UIImage systemImageNamed:@"power" withConfiguration:[DOGlobalAppearance smallIconImageConfiguration]] identifier:@"reboot-device" handler:^(__kindof UIAction * _Nonnull action) {
+            if (![[DOEnvironmentManager sharedManager] isJailbroken]) return;
             UIAlertController *confirmation = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Menu_Reboot_Device_Title") message:DOLocalizedString(@"Alert_Reboot_Device_Body") preferredStyle:UIAlertControllerStyleAlert];
             [confirmation addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_Cancel") style:UIAlertActionStyleCancel handler:nil]];
             [confirmation addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_Reboot") style:UIAlertActionStyleDestructive handler:^(__kindof UIAlertAction * _Nonnull alertAction) {
+                if (![[DOEnvironmentManager sharedManager] isJailbroken]) return;
                 [self fadeToBlack:^{
                     [[DOEnvironmentManager sharedManager] reboot];
                 }];
@@ -3039,9 +3041,11 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
         [[DOEnvironmentManager sharedManager] rebootUserspace];
     }];
     UIAction *rebootAction = [UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
+        if (![[DOEnvironmentManager sharedManager] isJailbroken]) return;
         UIAlertController *confirmation = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Menu_Reboot_Device_Title") message:DOLocalizedString(@"Alert_Reboot_Device_Body") preferredStyle:UIAlertControllerStyleAlert];
         [confirmation addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_Cancel") style:UIAlertActionStyleCancel handler:nil]];
         [confirmation addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_Reboot") style:UIAlertActionStyleDestructive handler:^(__kindof UIAlertAction * _Nonnull alertAction) {
+            if (![[DOEnvironmentManager sharedManager] isJailbroken]) return;
             [self fadeToBlack:^{
                 [[DOEnvironmentManager sharedManager] reboot];
             }];
@@ -3051,7 +3055,7 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
 
     [restartStack addArrangedSubview:[self customGlassRestartButtonWithTitle:DOLocalizedString(@"Menu_Restart_SpringBoard_Title") imageName:@"arrow.clockwise" action:respringAction enabled:isJailbroken cornerRadius:restartCornerRadius]];
     [restartStack addArrangedSubview:[self customGlassRestartButtonWithTitle:DOLocalizedString(@"Menu_Reboot_Userspace_Title") imageName:@"arrow.clockwise.circle" action:userspaceAction enabled:isJailbroken cornerRadius:restartCornerRadius]];
-    [restartStack addArrangedSubview:[self customGlassRestartButtonWithTitle:DOLocalizedString(@"Menu_Reboot_Device_Title") imageName:@"power" action:rebootAction enabled:YES cornerRadius:restartCornerRadius]];
+    [restartStack addArrangedSubview:[self customGlassRestartButtonWithTitle:DOLocalizedString(@"Menu_Reboot_Device_Title") imageName:@"power" action:rebootAction enabled:[[DOEnvironmentManager sharedManager] isJailbroken] cornerRadius:restartCornerRadius]];
 
     // Keep a dedicated gap for the optional update button. setupUpdateAvailable:
     // positions that button above jailbreakBtn, so without this reserve it can overlap
@@ -3391,7 +3395,7 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
 
 - (BOOL)actionMenuActionIsEnabled:(UIAction *)action
 {
-    if ([action.identifier isEqualToString:@"respring"] || [action.identifier isEqualToString:@"reboot-userspace"]) {
+    if ([action.identifier isEqualToString:@"respring"] || [action.identifier isEqualToString:@"reboot-userspace"] || [action.identifier isEqualToString:@"reboot-device"]) {
         return [[DOEnvironmentManager sharedManager] isJailbroken];
     }
     return YES;
