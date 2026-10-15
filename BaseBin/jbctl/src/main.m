@@ -55,10 +55,11 @@ int main(int argc, char* argv[])
 		if (!strcmp(argv[argc-2], "--waitfor")) {
 			// When the Dopamine app spawns jbctl it needs to clean up it's own ucred before jbctl does the requested action
 			// For this it will attach a pipe fd and write to it once the cleanup is done, so we need to wait until that write happens
-			int fd = atoi(argv[argc-1]);
-			char token = 0;
-			(void)read(fd, &token, sizeof(token));
-			close(fd);
+			int r = cmd_wait_for_handoff(argv[argc-1]);
+			if (r != 0) {
+				fprintf(stderr, "Cancelled action: App handoff failed (%d)\n", r);
+				return r;
+			}
 		}
 	}
 

@@ -217,44 +217,62 @@ extern char **environ;
 
 - (void)runUnsandboxed:(void (^)(void))unsandboxBlock
 {
-    if ([self isInstalledThroughTrollStore]) {
-        unsandboxBlock();
-    }
-    else if([self isJailbroken]) {
-        uint64_t labelBackup = 0;
-        jbclient_root_set_mac_label(1, -1, &labelBackup);
-        unsandboxBlock();
-        jbclient_root_set_mac_label(1, labelBackup, NULL);
-    }
-    else {
-        // Hope that we are already unsandboxed
-        unsandboxBlock();
+    @synchronized (self) {
+        if ([self isInstalledThroughTrollStore]) {
+            unsandboxBlock();
+        }
+        else if([self isJailbroken]) {
+            uint64_t labelBackup = 0;
+            if (jbclient_root_set_mac_label(1, -1, &labelBackup) != 0) return;
+            @try {
+                unsandboxBlock();
+            }
+            @finally {
+                if (jbclient_root_set_mac_label(1, labelBackup, NULL) != 0) {
+                    roothide_stage_log("privilege.sandbox_restore.failed exiting_app=1");
+                    exit(EXIT_FAILURE);
+                }
+            }
+        }
+        else {
+            // Hope that we are already unsandboxed
+            unsandboxBlock();
+        }
     }
 }
 
 - (void)runAsRoot:(void (^)(void))rootBlock
 {
-	uid_t originalUser = geteuid();
-	gid_t originalGroup = getegid();
-	roothide_stage_log("privilege.enter uid=%u euid=%u gid=%u egid=%u",
-	                   (unsigned)getuid(), (unsigned)originalUser,
-	                   (unsigned)getgid(), (unsigned)originalGroup);
-	if (originalUser == 0 && originalGroup == 0) {
-		rootBlock();
-		return;
-	}
+    // Identity and sandbox changes affect the whole process. The recursive
+    // monitor also permits nested runAsRoot/runUnsandboxed on this thread.
+    @synchronized (self) {
+        uid_t originalUser = geteuid();
+        gid_t originalGroup = getegid();
+        roothide_stage_log("privilege.enter uid=%u euid=%u gid=%u egid=%u",
+                           (unsigned)getuid(), (unsigned)originalUser,
+                           (unsigned)getgid(), (unsigned)originalGroup);
+        if (originalUser == 0 && originalGroup == 0) {
+            rootBlock();
+            return;
+        }
 
-	int rootResult = jbclient_dopamine_get_root();
-	roothide_stage_log("privilege.set_root server_result=%d uid=%u euid=%u gid=%u egid=%u",
-	                   rootResult, (unsigned)getuid(), (unsigned)geteuid(),
-	                   (unsigned)getgid(), (unsigned)getegid());
-	if (rootResult == 0) {
-		rootBlock();
-		int dropResult = jbclient_dopamine_drop_root();
-		roothide_stage_log("privilege.drop_root server_result=%d uid=%u euid=%u gid=%u egid=%u",
-		                   dropResult, (unsigned)getuid(), (unsigned)geteuid(),
-		                   (unsigned)getgid(), (unsigned)getegid());
-	}
+        int rootResult = jbclient_dopamine_get_root();
+        roothide_stage_log("privilege.set_root server_result=%d uid=%u euid=%u gid=%u egid=%u",
+                           rootResult, (unsigned)getuid(), (unsigned)geteuid(),
+                           (unsigned)getgid(), (unsigned)getegid());
+        if (rootResult == 0) {
+            @try {
+                rootBlock();
+            }
+            @finally {
+                int dropResult = jbclient_dopamine_drop_root();
+                roothide_stage_log("privilege.drop_root server_result=%d uid=%u euid=%u gid=%u egid=%u",
+                                   dropResult, (unsigned)getuid(), (unsigned)geteuid(),
+                                   (unsigned)getgid(), (unsigned)getegid());
+                if (dropResult != 0) exit(EXIT_FAILURE);
+            }
+        }
+    }
 }
 
 - (int)spawnJbctlAsRootWithArgs:(NSArray *)args
@@ -313,8 +331,10 @@ extern char **environ;
     int waitPipe[2] = {-1, -1};
 
     if (!needsLegacySolution) {
-        if (pipe(waitPipe) != 0) {
-            r = errno;
+        r = cmd_create_handoff_pipe(waitPipe);
+        if (r != 0) {
+            if (waitPipe[0] >= 0) close(waitPipe[0]);
+            if (waitPipe[1] >= 0) close(waitPipe[1]);
             posix_spawnattr_destroy(&attr);
             posix_spawn_file_actions_destroy(&actions);
             for (int y = 0; y < i; y++) free(argBuf[y]);
@@ -323,6 +343,8 @@ extern char **environ;
         }
 
         r = posix_spawn_file_actions_adddup2(&actions, waitPipe[0], 3);
+        if (!r) r = posix_spawn_file_actions_addclose(&actions, waitPipe[0]);
+        if (!r) r = posix_spawn_file_actions_addclose(&actions, waitPipe[1]);
         if (r != 0) {
             close(waitPipe[0]);
             close(waitPipe[1]);
@@ -364,6 +386,11 @@ extern char **environ;
         ssize_t written = write(waitPipe[1], &token, sizeof(token));
         roothide_stage_log("jbctl.handoff.end written=%zd errno=%d", written, written < 0 ? errno : 0);
     }
+
+    // EOF cancels the child if the token was not delivered. Do this before
+    // waiting for exit so a failed write cannot leave both sides waiting.
+    if (waitPipe[0] >= 0) { close(waitPipe[0]); waitPipe[0] = -1; }
+    if (waitPipe[1] >= 0) { close(waitPipe[1]); waitPipe[1] = -1; }
 
     roothide_stage_log("jbctl.wait.begin spawn_result=%d pid=%d", spawnResult, pid);
     r = (spawnResult == 0) ? cmd_wait_for_exit(pid) : spawnResult;

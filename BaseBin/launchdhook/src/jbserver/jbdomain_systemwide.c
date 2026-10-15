@@ -11,6 +11,7 @@
 #include <libjailbreak/util.h>
 #include <libjailbreak/primitives.h>
 #include <libjailbreak/codesign.h>
+#include <libjailbreak/credentials.h>
 
 #include <signal.h>
 #include <libjailbreak/roothider.h>
@@ -276,16 +277,29 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 	struct stat sb;
 	if (stat(procPath, &sb) == 0) {
 		if (S_ISREG(sb.st_mode) && (sb.st_mode & (S_ISUID | S_ISGID))) {
-			uint64_t ucred = proc_ucred(proc);
-			if ((sb.st_mode & (S_ISUID))) {
-				kwrite32(proc + koffsetof(proc, svuid), sb.st_uid);
-				kwrite32(ucred + koffsetof(ucred, svuid), sb.st_uid);
-				kwrite32(ucred + koffsetof(ucred, uid), sb.st_uid);
+			if (__builtin_available(iOS 17.0, *)) {
+				struct rh_credential identity;
+				int r = proc_credential_read(proc, &identity);
+				if (r) return r;
+				if (sb.st_mode & S_ISUID) identity.uid = identity.svuid = sb.st_uid;
+				if (sb.st_mode & S_ISGID) {
+					identity.gid = identity.svgid = identity.groups[0] = sb.st_gid;
+				}
+				r = proc_credential_set(proc, procPath, &identity);
+				if (r) return r;
 			}
-			if ((sb.st_mode & (S_ISGID))) {
-				kwrite32(proc + koffsetof(proc, svgid), sb.st_gid);
-				kwrite32(ucred + koffsetof(ucred, svgid), sb.st_gid);
-				kwrite32(ucred + koffsetof(ucred, groups), sb.st_gid);
+			else {
+				uint64_t ucred = proc_ucred(proc);
+				if (sb.st_mode & S_ISUID) {
+					kwrite32(proc + koffsetof(proc, svuid), sb.st_uid);
+					kwrite32(ucred + koffsetof(ucred, svuid), sb.st_uid);
+					kwrite32(ucred + koffsetof(ucred, uid), sb.st_uid);
+				}
+				if (sb.st_mode & S_ISGID) {
+					kwrite32(proc + koffsetof(proc, svgid), sb.st_gid);
+					kwrite32(ucred + koffsetof(ucred, svgid), sb.st_gid);
+					kwrite32(ucred + koffsetof(ucred, groups), sb.st_gid);
+				}
 			}
 			uint32_t flag = kread32(proc + koffsetof(proc, flag));
 			if ((flag & P_SUGID) != 0) {
@@ -328,11 +342,21 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 	// This is so that the buttons inside it can work when jailbroken, even if the app was not installed by TrollStore
 	else if (is_dopamine_app(procPath)) {
 		// svuid = 0, svgid = 0
-		uint64_t ucred = proc_ucred(proc);
-		kwrite32(proc + koffsetof(proc, svuid), 0);
-		kwrite32(ucred + koffsetof(ucred, svuid), 0);
-		kwrite32(proc + koffsetof(proc, svgid), 0);
-		kwrite32(ucred + koffsetof(ucred, svgid), 0);
+		if (__builtin_available(iOS 17.0, *)) {
+			struct rh_credential identity;
+			int r = proc_credential_read(proc, &identity);
+			if (r) return r;
+			identity.svuid = identity.svgid = 0;
+			r = proc_credential_set(proc, procPath, &identity);
+			if (r) return r;
+		}
+		else {
+			uint64_t ucred = proc_ucred(proc);
+			kwrite32(proc + koffsetof(proc, svuid), 0);
+			kwrite32(ucred + koffsetof(ucred, svuid), 0);
+			kwrite32(proc + koffsetof(proc, svgid), 0);
+			kwrite32(ucred + koffsetof(ucred, svgid), 0);
+		}
 
 		// platformize
 		proc_csflags_set(proc, CS_PLATFORM_BINARY);

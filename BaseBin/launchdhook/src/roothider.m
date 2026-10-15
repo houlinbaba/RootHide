@@ -9,6 +9,7 @@
 
 #include <libjailbreak/libjailbreak.h>
 #include <libjailbreak/roothider.h>
+#include <libjailbreak/credential_types.h>
 
 extern int proc_get_pidversion(pid_t pid);
 extern int jbdSpawnPatchChildDeferred(int pid, bool resume);
@@ -348,6 +349,37 @@ int roothide_launchd___posix_spawn__spinlock_fix_only(pid_t *restrict pidp, cons
 	return ret;
 }
 
+static int spawn_credential_helper(pid_t *pidp, const char *path, struct _posix_spawn_args_desc *desc,
+                                   char *const argv[], char *const envp[])
+{
+    const char *mainOnly = envbuf_getenv(envp, RH_CREDENTIAL_MAIN_ONLY_ENV);
+    if (mainOnly && !strcmp(mainOnly, "1")) {
+        // Bootstrap uses the signed App's main entry, even before the newly
+        // built dyld exists. Do not route it through normal App check-in.
+        if (!is_dopamine_app(path)) return EINVAL;
+        return __posix_spawn_orig_wrapper(pidp, path, desc, argv, envp);
+    }
+    // Runtime donors execute the target's dyld entry without loading its
+    // application or calling back into this already busy credential server.
+    posix_spawnattr_t *attr = &desc->attrp;
+    short flags = 0;
+    int r = posix_spawnattr_getflags(attr, &flags);
+    if (!r) r = posix_spawnattr_setflags(attr, flags | POSIX_SPAWN_START_SUSPENDED);
+    if (r) return r;
+    pid_t child = 0;
+    r = __posix_spawn_orig_wrapper(&child, path, desc, argv, envp);
+    posix_spawnattr_setflags(attr, flags);
+    if (r) return r;
+    if (pidp) *pidp = child;
+    if (child <= 1) return EIO;
+    int version = proc_get_pidversion(child);
+    if (version <= 0 || proc_patch_csflags(child) || roothide_patch_proc_ex(child, true)) r = EIO;
+    if (!r && !(flags & POSIX_SPAWN_START_SUSPENDED) &&
+        (proc_get_pidversion(child) != version || kill(child, SIGCONT))) r = EIO;
+    if (r && version > 0 && proc_get_pidversion(child) == version) kill(child, SIGKILL);
+    return r;
+}
+
 int roothide_launchd___posix_spawn_prehook(pid_t *restrict pidp, const char *restrict path, struct _posix_spawn_args_desc *desc, char *const argv[restrict], char *const envp[restrict])
 {
 	if(!desc || !desc->attrp) {
@@ -365,6 +397,14 @@ int roothide_launchd___posix_spawn_prehook(pid_t *restrict pidp, const char *res
 
 	if(!path) {
 		return __posix_spawn_hook(pidp, path, desc, argv, envp);
+	}
+
+	if (__builtin_available(iOS 17.0, *)) {
+		const char *helper = envbuf_getenv(envp, RH_CREDENTIAL_HELPER_ENV);
+		if (geteuid() == 0 && argv && argv[0] && argv[1] &&
+		    !strcmp(argv[1], RH_CREDENTIAL_HELPER_ARG) && helper && !strcmp(helper, "1")) {
+			return spawn_credential_helper(pidp, path, desc, argv, envp);
+		}
 	}
 
 	if(isRemovableBundlePath(path)) {

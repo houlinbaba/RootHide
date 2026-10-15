@@ -57,6 +57,11 @@ void thread_caffeinate_stop(void);
 void convert_data_to_hex_string(const void *data, size_t size, char *outBuf);
 int convert_hex_string_to_data(const char *string, void *outBuf);
 
+// Creates close-on-exec endpoints above fd 3; the child receives only its reader.
+int cmd_create_handoff_pipe(int fds[2]);
+// Consumes the fd named by fdText. Only the explicit release byte authorizes
+// execution; EOF, malformed input, read errors and timeout cancel the action.
+int cmd_wait_for_handoff(const char *fdText);
 int cmd_wait_for_exit(pid_t pid);
 int fd_attach_signature(int fd, fsignatures_t *signature);
 int exec_cmd(const char *binary, ...);

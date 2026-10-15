@@ -4,6 +4,9 @@
 #include <libjailbreak/codesign.h>
 #include <libjailbreak/libjailbreak.h>
 #include <libproc.h>
+#include <sys/proc_info.h>
+#include <libjailbreak/credentials.h>
+#include <errno.h>
 
 static char *read_file_to_string(const char *path) {
     FILE *fp = fopen(path, "rb");
@@ -58,6 +61,17 @@ int dopamine_get_root(audit_token_t *processToken)
 	pid_t pid = audit_token_to_pid(*processToken);
 	uint64_t proc = proc_find(pid);
 	if (!proc) return 1;
+	if (__builtin_available(iOS 17.0, *)) {
+		struct rh_credential identity;
+		int r = proc_credential_read(proc, &identity);
+		if (r) return r;
+		if (identity.uid != 501) return EPERM;
+		char path[PROC_PIDPATHINFO_MAXSIZE];
+		if (proc_pidpath_audittoken(processToken, path, sizeof(path)) <= 0) return ESRCH;
+		identity.uid = 0;
+		identity.gid = identity.groups[0] = 0;
+		return proc_credential_set(proc, path, &identity);
+	}
 	uint64_t ucred = proc_ucred(proc);
 
 	if (kread32(ucred + koffsetof(ucred, uid)) == 501) {
@@ -85,6 +99,17 @@ int dopamine_drop_root(audit_token_t *processToken)
 	pid_t pid = audit_token_to_pid(*processToken);
 	uint64_t proc = proc_find(pid);
 	if (!proc) return 1;
+	if (__builtin_available(iOS 17.0, *)) {
+		struct rh_credential identity;
+		int r = proc_credential_read(proc, &identity);
+		if (r) return r;
+		if (identity.uid != 0) return EPERM;
+		char path[PROC_PIDPATHINFO_MAXSIZE];
+		if (proc_pidpath_audittoken(processToken, path, sizeof(path)) <= 0) return ESRCH;
+		identity.uid = 501;
+		identity.gid = identity.groups[0] = 501;
+		return proc_credential_set(proc, path, &identity);
+	}
 	uint64_t ucred = proc_ucred(proc);
 
 	if (kread32(ucred + koffsetof(ucred, uid)) == 0) {

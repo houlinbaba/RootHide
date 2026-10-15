@@ -21,6 +21,10 @@
 #include <sys/mman.h>
 #include <stdatomic.h>
 #include <errno.h>
+#include <limits.h>
+#include <poll.h>
+#include <fcntl.h>
+#include <time.h>
 extern char **environ;
 
 #include "roothider.h"
@@ -856,6 +860,62 @@ int fd_attach_signature(int fd, fsignatures_t *signature)
 	kwrite32(target_cs_blob + koffsetof(cs_blob, cpu_type), header.cputype);
 	kwrite32(target_cs_blob + koffsetof(cs_blob, cpu_subtype), header.cpusubtype);
 	return 0;
+}
+
+int cmd_create_handoff_pipe(int fds[2])
+{
+	fds[0] = fds[1] = -1;
+	int original[2];
+	if (pipe(original) != 0) return errno;
+	// No dup2 source may collide with the child's fd 3. CLOEXEC also prevents
+	// unrelated children from keeping the parent's release pipe alive.
+	fds[0] = fcntl(original[0], F_DUPFD_CLOEXEC, 10);
+	fds[1] = fds[0] >= 0 ? fcntl(original[1], F_DUPFD_CLOEXEC, 10) : -1;
+	int result = fds[1] < 0 ? errno : 0;
+	close(original[0]);
+	close(original[1]);
+	if (!result && fcntl(fds[1], F_SETNOSIGPIPE, 1) != 0) result = errno;
+	if (result) {
+		if (fds[0] >= 0) close(fds[0]);
+		if (fds[1] >= 0) close(fds[1]);
+		fds[0] = fds[1] = -1;
+	}
+	return result;
+}
+
+int cmd_wait_for_handoff(const char *fdText)
+{
+	if (!fdText || !*fdText) return EINVAL;
+	for (const char *p = fdText; *p; p++) {
+		if (*p < '0' || *p > '9') return EINVAL;
+	}
+	errno = 0;
+	char *end = NULL;
+	long value = strtol(fdText, &end, 10);
+	if (errno || !end || *end || value < 3 || value > INT_MAX) return EINVAL;
+	int fd = (int)value;
+	struct timespec start, now;
+	int result = EIO;
+	if (clock_gettime(CLOCK_MONOTONIC, &start) != 0) goto done;
+	for (;;) {
+		if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) break;
+		int64_t elapsed = (int64_t)(now.tv_sec - start.tv_sec) * 1000 +
+		                  (now.tv_nsec - start.tv_nsec) / 1000000;
+		if (elapsed >= 30000) { result = ETIMEDOUT; break; }
+		struct pollfd pfd = { .fd = fd, .events = POLLIN };
+		int ready = poll(&pfd, 1, (int)(30000 - elapsed));
+		if (ready < 0 && errno == EINTR) continue;
+		if (ready < 0) { result = errno; break; }
+		if (!ready) { result = ETIMEDOUT; break; }
+		char token = 0;
+		ssize_t n = read(fd, &token, sizeof(token));
+		if (n < 0 && errno == EINTR) continue;
+		result = n == 1 ? (token == 'w' ? 0 : EPROTO) : (n == 0 ? ECANCELED : errno);
+		break;
+	}
+done:
+	close(fd);
+	return result;
 }
 
 int cmd_wait_for_exit(pid_t pid)

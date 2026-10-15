@@ -31,6 +31,9 @@
 #import <libjailbreak/kcall_arm64.h>
 #import <libjailbreak/basebin_gen.h>
 #import <libjailbreak/roothide_stage.h>
+#import <libjailbreak/credentials.h>
+#import <libproc.h>
+#import <sys/proc_info.h>
 #import <choma/Fat.h>
 #import <choma/MachO.h>
 #import <errno.h>
@@ -111,6 +114,10 @@ typedef NS_ENUM(NSInteger, JBErrorCode) {
 };
 
 @implementation DOJailbreaker
+{
+    struct rh_credential_snapshot _bootstrapCredentialSnapshot;
+    BOOL _bootstrapIdentityActive;
+}
 
 - (NSError *)gatherSystemInformation
 {
@@ -293,20 +300,43 @@ sets[idx] = NULL;
 - (NSError *)elevatePrivileges
 {
     uint64_t proc = proc_self();
-    uint64_t ucred = proc_ucred(proc);
-    
-    // Get uid 0
-    kwrite32(proc + koffsetof(proc, svuid), 0);
-    kwrite32(ucred + koffsetof(ucred, svuid), 0);
-    kwrite32(ucred + koffsetof(ucred, ruid), 0);
-    kwrite32(ucred + koffsetof(ucred, uid), 0);
-    
-    // Get gid 0
-    kwrite32(proc + koffsetof(proc, svgid), 0);
-    kwrite32(ucred + koffsetof(ucred, rgid), 0);
-    kwrite32(ucred + koffsetof(ucred, svgid), 0);
-    kwrite32(ucred + koffsetof(ucred, groups), 0);
-    
+    if (@available(iOS 17.0, *)) {
+        int r = proc_credential_snapshot_self(&_bootstrapCredentialSnapshot);
+        _bootstrapIdentityActive = _bootstrapCredentialSnapshot.ucred != 0;
+        char executable[PROC_PIDPATHINFO_MAXSIZE];
+        if (!r && proc_pidpath(getpid(), executable, sizeof(executable)) <= 0) r = ESRCH;
+        struct rh_credential root = _bootstrapCredentialSnapshot.identity;
+        root.uid = root.ruid = root.svuid = 0;
+        root.gid = root.rgid = root.svgid = root.groups[0] = 0;
+        if (!r) {
+            if ([[DOEnvironmentManager sharedManager] isInstalledThroughTrollStore]) {
+                r = proc_credential_set(proc, executable, &root);
+            }
+            else {
+                r = proc_credential_bootstrap_self();
+            }
+        }
+        if (r) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot
+                                     userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to prepare bootstrap credentials: %d", r]}];
+    }
+    else {
+        uint64_t ucred = proc_ucred(proc);
+
+        // Get uid 0
+        kwrite32(proc + koffsetof(proc, svuid), 0);
+        kwrite32(ucred + koffsetof(ucred, svuid), 0);
+        kwrite32(ucred + koffsetof(ucred, ruid), 0);
+        kwrite32(ucred + koffsetof(ucred, uid), 0);
+
+        // Get gid 0
+        kwrite32(proc + koffsetof(proc, svgid), 0);
+        kwrite32(ucred + koffsetof(ucred, rgid), 0);
+        kwrite32(ucred + koffsetof(ucred, svgid), 0);
+        kwrite32(ucred + koffsetof(ucred, groups), 0);
+        uint64_t label = kread_ptr(ucred + koffsetof(ucred, label));
+        mac_label_set(label, 1, -1);
+    }
+
     // Add P_SUGID
     uint32_t flag = 0;
     if (kreadbuf(proc + koffsetof(proc, flag), &flag, sizeof(flag)) != 0) {
@@ -320,8 +350,8 @@ sets[idx] = NULL;
     if (getgid() != 0) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedGetRoot userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to get root, gid still %d", getgid()]}];
     
     // Unsandbox
-    uint64_t label = kread_ptr(ucred + koffsetof(ucred, label));
-    mac_label_set(label, 1, -1);
+    // The iOS 17 donor already supplies an unsandboxed credential. Never edit
+    // the inherited donor label; the original label is held by the snapshot.
     NSError *error = nil;
     [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"/var" error:&error];
     if (error) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedUnsandbox userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to unsandbox, /var does not seem accessible (%s)", error.description.UTF8String]}];
@@ -611,23 +641,26 @@ void *boomerang_server(struct boomerang_info *info)
 
 - (NSError *)cleanUpPostExploitation
 {
-    if (@available(iOS 17.0, *)) {
-        uint64_t proc = proc_self();
-        uint64_t ucred = proc_ucred(proc);
-
-        // Restore the temporary root credentials before returning to userspace.
-        kwrite32(ucred + koffsetof(ucred, svuid), 501);
-        kwrite32(ucred + koffsetof(ucred, ruid), 501);
-        kwrite32(ucred + koffsetof(ucred, uid), 501);
-        kwrite32(ucred + koffsetof(ucred, rgid), 501);
-        kwrite32(ucred + koffsetof(ucred, svgid), 501);
-        kwrite32(ucred + koffsetof(ucred, groups), 501);
+    if (_bootstrapIdentityActive) {
+        int r = proc_credential_restore_self(&_bootstrapCredentialSnapshot);
+        roothide_stage_log("bootstrap.credential_restore.end result=%d", r);
+        if (r) {
+            // Failure callers may ignore the returned NSError. Do not return
+            // to UIKit or request a reboot with a partially restored identity.
+            roothide_stage_log("bootstrap.credential_restore.failed exiting_app=1");
+            exit(EXIT_FAILURE);
+        }
+        _bootstrapIdentityActive = NO;
     }
     return nil;
 }
 
 - (void)runWithError:(NSError **)errOut didRemoveJailbreak:(BOOL*)didRemove showLogs:(BOOL *)showLogs
 {
+    // Keep the existing log in the App's mobile container even while bootstrap
+    // temporarily switches the effective identity and HOME to root.
+    NSString *stageLogPath = [[DOUIManager sharedInstance] rootHideStageLogPath];
+    int logResult = roothide_stage_begin(stageLogPath.fileSystemRepresentation, false);
 
 /****************** roothide specific ****************/
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -692,7 +725,10 @@ void *boomerang_server(struct boomerang_info *info)
 
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Elevating Privileges") debug:NO];
     *errOut = [self elevatePrivileges];
-    if (*errOut) return;
+    if (*errOut) {
+        [self cleanUpPostExploitation];
+        return;
+    }
     *errOut = [self showNonDefaultSystemApps];
     if (*errOut) {
         [self cleanUpPostExploitation];
@@ -772,7 +808,6 @@ void *boomerang_server(struct boomerang_info *info)
 
 /*************************** roothide specific *******************/
 [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"RootHide Stage") debug:NO];
-int logResult = roothide_stage_begin([[DOUIManager sharedInstance] rootHideStageLogPath].fileSystemRepresentation, false);
 roothide_stage_log("activation.begin log_open_result=%d os=%s dyld_patch_enabled=%d", logResult,
     NSProcessInfo.processInfo.operatingSystemVersionString.UTF8String, gSystemInfo.jailbreakInfo.dyld_patch_enabled);
 

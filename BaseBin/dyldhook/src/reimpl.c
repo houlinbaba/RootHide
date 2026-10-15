@@ -7,6 +7,23 @@
 
 #include "dyld.h"
 
+// Credential donors run before libc/TLS initialization. Return negative errno
+// directly; cerror would try to access uninitialized thread-local storage.
+__attribute__((naked)) int64_t msyscall_noerrno(uint64_t syscall, ...)
+{
+    asm(
+        "mov x16, x0\n"
+        "ldp x0, x1, [sp]\n"
+        "ldp x2, x3, [sp, 0x10]\n"
+        "ldp x4, x5, [sp, 0x20]\n"
+        "ldp x6, x7, [sp, 0x30]\n"
+        "svc 0x80\n"
+        "b.cc 1f\n"
+        "neg x0, x0\n"
+        "1: ret\n"
+    );
+}
+
 __attribute__((naked)) uint64_t msyscall_errno(uint64_t syscall, ...)
 {
     asm(
