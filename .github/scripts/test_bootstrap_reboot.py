@@ -33,9 +33,15 @@ MODEL_EXTRA = r'''
 #define posix_spawn_file_actions_adddup2 model_actions_dup
 #define posix_spawn_file_actions_addclose model_actions_close
 #define posix_spawn_file_actions_destroy model_actions_destroy
+#ifndef WNOHANG
 #define WNOHANG 1
+#endif
+#ifndef WIFEXITED
 #define WIFEXITED(s) (((s)&255)==0)
+#endif
+#ifndef WEXITSTATUS
 #define WEXITSTATUS(s) ((s)>>8)
+#endif
 typedef int posix_spawn_file_actions_t;
 static unsigned ids[4];
 static unsigned getuid(void){return ids[0];}
@@ -326,10 +332,17 @@ def main():
         harness = tmp / 'bootstrap-reboot.c'
         # The shared pipe model contains read-side helpers used by its own test.
         model = MODEL.replace('static int poll(', 'static __attribute__((unused)) int poll(').replace('static ssize_t read(', 'static __attribute__((unused)) ssize_t read(')
-        harness.write_text('#include <sys/types.h>\n' + model + MODEL_EXTRA + create + stripped + CASES, encoding='utf-8')
+        # Load native wait macros before the model's Windows-only fallbacks.
+        # Apple stdlib headers can also include sys/wait.h indirectly.
+        model_code = '#include <sys/types.h>\n#ifndef _WIN32\n#include <sys/wait.h>\n#endif\n' + model + MODEL_EXTRA + create + stripped + CASES
+        harness.write_text(model_code, encoding='utf-8')
         binary = tmp / ('bootstrap-reboot.exe' if sys.platform == 'win32' else 'bootstrap-reboot')
         subprocess.run(compiler + sanitizer + flags + [str(harness), '-o', str(binary)], check=True)
         subprocess.run([str(binary)], check=True, timeout=15)
+        if args.zig and sys.platform != 'darwin':
+            subprocess.run(compiler + ['-target', 'aarch64-macos'] + flags +
+                           ['-c', str(harness), '-o', str(tmp / 'bootstrap-model-darwin.o')], check=True)
+            print('PASS: the same bootstrap model compiles with Darwin sys/wait.h and -Werror')
         header = (SRC / 'userspace_reboot.h').read_text(encoding='utf-8')
         header = '\n'.join(line for line in header.splitlines() if not line.startswith('#include'))
         methods = '\n'.join(function(env, sig) for sig in ('- (void)rebootUserspace', '- (int)prepareBootstrapUserspaceReboot', '- (void)cancelPreparedUserspaceReboot'))
