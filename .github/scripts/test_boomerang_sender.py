@@ -323,18 +323,29 @@ static void drained(void) {
     assert(!dispatch_semaphore_wait(test_drained, (dispatch_time)(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)));
     dispatch_release(test_drained); assert(!ports && !attributes);
 }
-int main(void) {
+int main(int argc, char **argv) {
     assert(pthread_main_np());
-    for (int fail = 0; fail <= 10; fail++) {
-        reset(fail, 0); int result = boomerang_stashPrimitives();
-        if (fail <= 6 && fail != 0) { assert(result && !ports && !attributes); dispatch_release(test_drained); }
-        else { drained(); if (!fail) assert(!result && published == 1 && !kills); else assert(result && !published); }
+    assert(argc == 3);
+    int fail = atoi(argv[1]), next_mode = atoi(argv[2]);
+    assert(fail >= 0 && fail <= 10 && next_mode >= 0 && next_mode <= 4);
+    assert(!fail || !next_mode);
+    // One scenario per process: each owns its dispatch objects, mutable mock
+    // state and watchdog budget, including sanitizer/runtime initialization.
+    reset(fail, next_mode);
+    int result = boomerang_stashPrimitives();
+    if (fail && fail <= 6) {
+        assert(result && !ports && !attributes);
+        dispatch_release(test_drained);
     }
-    reset(0, 1); assert(boomerang_stashPrimitives() == EIO && !kills); drained();
-    reset(0, 2); assert(boomerang_stashPrimitives() == ETIMEDOUT && kills == 1); drained();
-    reset(0, 3); assert(boomerang_stashPrimitives() == ETIMEDOUT && !published); drained();
-    reset(0, 4); assert(!boomerang_stashPrimitives() && !kills); drained();
-    puts("PASS: real libdispatch services RPCs with the main thread blocked and safely drains cancellation after sender timeout");
+    else {
+        drained();
+        if (fail) assert(result && !published);
+        else if (next_mode == 1) assert(result == EIO && !kills);
+        else if (next_mode == 2) assert(result == ETIMEDOUT && kills == 1);
+        else if (next_mode == 3) assert(result == ETIMEDOUT && !published);
+        else assert(!result && published == 1 && !kills);
+    }
+    printf("PASS: real libdispatch sender failure=%d mode=%d\n", fail, next_mode);
     return 0;
 }
 '''
@@ -449,15 +460,21 @@ def main():
         c_file = temp / 'sender.c'
         binary = temp / ('sender.exe' if sys.platform == 'win32' else 'sender')
 
-        def run(text, *, execute=True, reject=False, extra_flags=()):
+        def run(text, *, execute=True, reject=False, extra_flags=(), cases=None):
             c_file.write_text(text, encoding='utf-8')
             subprocess.run(compiler + flags + list(extra_flags) + [str(c_file), '-o', str(binary)], check=True)
             if execute:
-                result = subprocess.run([str(binary)], capture_output=reject, timeout=15)
-                if reject:
-                    assert result.returncode != 0, 'broken sender escaped the regression'
-                else:
-                    result.check_returncode()
+                for case in cases if cases is not None else [()]:
+                    if cases is not None:
+                        print(f'RUN: real libdispatch sender failure={case[0]} mode={case[1]}', flush=True)
+                    try:
+                        result = subprocess.run([str(binary), *map(str, case)], capture_output=reject, timeout=15)
+                    except subprocess.TimeoutExpired as error:
+                        raise RuntimeError(f'sender watchdog expired for case {case}; 15-second per-case deadline') from error
+                    if reject:
+                        assert result.returncode != 0, 'broken sender escaped the regression'
+                    else:
+                        result.check_returncode()
 
         # Execute the actual Darwin wrapper functions/macros and reset/drain
         # helpers on every host. Compilation alone cannot catch macro capture.
@@ -513,7 +530,8 @@ def main():
         if sys.platform == 'darwin':
             # The main queue is never drained by this main-thread test. Use
             # genuine dispatch queues, Blocks copying, cancellation and XPC.
-            run(HEADERS + DARWIN + MOCKS + DARWIN_TAIL + cleanup + sender + DARWIN_CASES)
+            cases = [(fail, 0) for fail in range(11)] + [(0, mode) for mode in range(1, 5)]
+            run(HEADERS + DARWIN + MOCKS + DARWIN_TAIL + cleanup + sender + DARWIN_CASES, cases=cases)
         else:
             print('LIMIT: real libdispatch scheduling/lifetimes run in Apple CI; iPhone reboot remains unverified')
 
