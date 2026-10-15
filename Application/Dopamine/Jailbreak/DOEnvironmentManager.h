@@ -59,11 +59,13 @@ typedef NS_ENUM(NSUInteger, DOPackageManagerHealthState) {
 - (void)setJailbroken:(BOOL)jailbroken withVersion:(NSString *)version;
 
 
-- (void)runUnsandboxed:(void (^)(void))unsandboxBlock;
-- (void)runAsRoot:(void (^)(void))rootBlock;
+- (int)runUnsandboxed:(void (^)(void))unsandboxBlock;
+- (int)runAsRoot:(void (^)(void))rootBlock;
 
 - (void)respring;
 - (void)rebootUserspace;
+- (int)prepareBootstrapUserspaceReboot;
+- (void)cancelPreparedUserspaceReboot;
 - (void)refreshJailbreakApps;
 - (NSError * _Nullable)repairJailbreakApps;
 - (void)reboot;

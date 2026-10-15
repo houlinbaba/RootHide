@@ -690,8 +690,8 @@ def runtime_callers():
 
 def compile_app_scopes(tmp, compiler, zig):
     source = (ROOT / 'Application/Dopamine/Jailbreak/DOEnvironmentManager.m').read_text(encoding='utf-8')
-    methods = function(source, '- (void)runAsRoot:') + function(source, '- (void)runUnsandboxed:')
-    for signature in ('- (void)runAsRoot:', '- (void)runUnsandboxed:'):
+    methods = function(source, '- (int)runAsRoot:') + function(source, '- (int)runUnsandboxed:')
+    for signature in ('- (int)runAsRoot:', '- (int)runUnsandboxed:'):
         method = function(source, signature)
         assert '@synchronized (self)' in method and '@finally' in method
     declarations = r'''
@@ -710,8 +710,8 @@ __attribute__((objc_root_class)) @interface NSObject @end
 @interface DOEnvironmentManager : NSObject
 - (BOOL)isInstalledThroughTrollStore;
 - (BOOL)isJailbroken;
-- (void)runAsRoot:(void (^)(void))block;
-- (void)runUnsandboxed:(void (^)(void))block;
+- (int)runAsRoot:(void (^)(void))block;
+- (int)runUnsandboxed:(void (^)(void))block;
 @end
 @implementation DOEnvironmentManager
 '''

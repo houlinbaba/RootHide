@@ -24,6 +24,7 @@
 #import <libjailbreak/machine_info.h>
 #import <libjailbreak/carboncopy.h>
 #import <libjailbreak/roothide_stage.h>
+#import <libjailbreak/userspace_reboot.h>
 #import <UIKit/UIKit.h>
 
 #import <IOKit/IOKitLib.h>
@@ -39,6 +40,9 @@ CFPropertyListRef MGCopyAnswer(CFStringRef);
 extern char **environ;
 
 @implementation DOEnvironmentManager
+{
+    struct rh_userspace_reboot _preparedUserspaceReboot;
+}
 
 @synthesize bootManifestHash = _bootManifestHash;
 
@@ -56,6 +60,7 @@ extern char **environ;
 {
     self = [super init];
     if (self) {
+        _preparedUserspaceReboot = RH_USERSPACE_REBOOT_EMPTY;
         _bootstrapNeedsMigration = NO;
         _bootstrapper = [[DOBootstrapper alloc] init];
         if ([self isJailbroken]) {
@@ -215,7 +220,7 @@ extern char **environ;
     return (BOOL)jbinfo(rootPath);
 }
 
-- (void)runUnsandboxed:(void (^)(void))unsandboxBlock
+- (int)runUnsandboxed:(void (^)(void))unsandboxBlock
 {
     @synchronized (self) {
         if ([self isInstalledThroughTrollStore]) {
@@ -223,7 +228,8 @@ extern char **environ;
         }
         else if([self isJailbroken]) {
             uint64_t labelBackup = 0;
-            if (jbclient_root_set_mac_label(1, -1, &labelBackup) != 0) return;
+            int result = jbclient_root_set_mac_label(1, -1, &labelBackup);
+            if (result != 0) return result;
             @try {
                 unsandboxBlock();
             }
@@ -238,10 +244,11 @@ extern char **environ;
             // Hope that we are already unsandboxed
             unsandboxBlock();
         }
+        return 0;
     }
 }
 
-- (void)runAsRoot:(void (^)(void))rootBlock
+- (int)runAsRoot:(void (^)(void))rootBlock
 {
     // Identity and sandbox changes affect the whole process. The recursive
     // monitor also permits nested runAsRoot/runUnsandboxed on this thread.
@@ -253,7 +260,7 @@ extern char **environ;
                            (unsigned)getgid(), (unsigned)originalGroup);
         if (originalUser == 0 && originalGroup == 0) {
             rootBlock();
-            return;
+            return 0;
         }
 
         int rootResult = jbclient_dopamine_get_root();
@@ -272,6 +279,7 @@ extern char **environ;
                 if (dropResult != 0) exit(EXIT_FAILURE);
             }
         }
+        return rootResult;
     }
 }
 
@@ -280,8 +288,9 @@ extern char **environ;
     // --waitfor was introduced in Dopamine 3.0.5. Keep the suspended-spawn
     // fallback only for an already-installed older jailbreak.
     bool needsLegacySolution = false;
-    if (self.jailbrokenVersion) {
-        needsLegacySolution = ([self.jailbrokenVersion compare:@"3.0.5" options:NSNumericSearch] == NSOrderedAscending);
+    NSString *installedVersion = self.jailbrokenVersion;
+    if (installedVersion) {
+        needsLegacySolution = ([installedVersion compare:@"3.0.5" options:NSNumericSearch] == NSOrderedAscending);
     }
 
     size_t argCapacity = args.count + 4;
@@ -308,7 +317,7 @@ extern char **environ;
     }
 
     __block pid_t pid = -1;
-    __block int spawnResult = -1;
+    __block int spawnResult = EPERM;
 
     posix_spawn_file_actions_t actions;
     posix_spawnattr_t attr;
@@ -366,8 +375,8 @@ extern char **environ;
         }
     }
 
-    [self runAsRoot:^{
-        [self runUnsandboxed:^{
+    int rootResult = [self runAsRoot:^{
+        int sandboxResult = [self runUnsandboxed:^{
             roothide_stage_log("jbctl.posix_spawn.begin uid=%d euid=%d gid=%d", getuid(), geteuid(), getgid());
             spawnResult = posix_spawn(&pid, argBuf[0], &actions, &attr, argBuf, environ);
             roothide_stage_log("jbctl.posix_spawn.end result=%d pid=%d", spawnResult, pid);
@@ -376,7 +385,9 @@ extern char **environ;
                 kill(pid, SIGCONT);
             }
         }];
+        if (sandboxResult != 0) spawnResult = sandboxResult;
     }];
+    if (rootResult != 0) spawnResult = rootResult;
     // For the normal 3.0.7 path, the child remains blocked on fd 3 until
     // both the temporary sandbox label and effective credentials are restored.
 
@@ -441,12 +452,20 @@ extern char **environ;
     requestInFlight = YES;
     NSString *logPath = [[DOUIManager sharedInstance] rootHideStageLogPath];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        struct rh_userspace_reboot prepared;
+        @synchronized(self) {
+            prepared = self->_preparedUserspaceReboot;
+            self->_preparedUserspaceReboot = RH_USERSPACE_REBOOT_EMPTY;
+        }
         // Append on App relaunch so an incomplete activation is still visible.
         int logResult = roothide_stage_begin(logPath.fileSystemRepresentation, true);
         roothide_stage_log("userspace_reboot.request log_open_result=%d", logResult);
         roothide_stage_log("userspace_reboot.spawn.begin uid=%d euid=%d gid=%d",
                            getuid(), geteuid(), getgid());
-        int result = [self spawnJbctlAsRootWithArgs:@[@"reboot_userspace"]];
+        // Initial activation prepared this child while bootstrap still had
+        // root. Release only after restoring the App, without another root RPC.
+        int result = prepared.pid > 0 ? rh_userspace_reboot_finish(&prepared) :
+                     [self spawnJbctlAsRootWithArgs:@[@"reboot_userspace"]];
         roothide_stage_log("userspace_reboot.spawn.end result=%d", result);
         roothide_stage_log("userspace_reboot.return result=%d", result);
         roothide_stage_end();
@@ -462,6 +481,23 @@ extern char **environ;
             }
         });
     });
+}
+
+- (int)prepareBootstrapUserspaceReboot
+{
+    @synchronized(self) {
+        return rh_userspace_reboot_prepare(&_preparedUserspaceReboot, JBROOT_PATH("/basebin/jbctl"), environ);
+    }
+}
+
+- (void)cancelPreparedUserspaceReboot
+{
+    struct rh_userspace_reboot prepared;
+    @synchronized(self) {
+        prepared = _preparedUserspaceReboot;
+        _preparedUserspaceReboot = RH_USERSPACE_REBOOT_EMPTY;
+    }
+    rh_userspace_reboot_cancel(&prepared);
 }
 
 - (void)refreshJailbreakApps

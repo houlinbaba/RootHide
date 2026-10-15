@@ -645,6 +645,7 @@ void *boomerang_server(struct boomerang_info *info)
         int r = proc_credential_restore_self(&_bootstrapCredentialSnapshot);
         roothide_stage_log("bootstrap.credential_restore.end result=%d", r);
         if (r) {
+            [[DOEnvironmentManager sharedManager] cancelPreparedUserspaceReboot];
             // Failure callers may ignore the returned NSError. Do not return
             // to UIKit or request a reboot with a partially restored identity.
             roothide_stage_log("bootstrap.credential_restore.failed exiting_app=1");
@@ -657,6 +658,7 @@ void *boomerang_server(struct boomerang_info *info)
 
 - (void)runWithError:(NSError **)errOut didRemoveJailbreak:(BOOL*)didRemove showLogs:(BOOL *)showLogs
 {
+    [[DOEnvironmentManager sharedManager] cancelPreparedUserspaceReboot];
     // Keep the existing log in the App's mobile container even while bootstrap
     // temporarily switches the effective identity and HOME to root.
     NSString *stageLogPath = [[DOUIManager sharedInstance] rootHideStageLogPath];
@@ -870,10 +872,25 @@ setenv("DYLD_INSERT_LIBRARIES", JBROOT_PATH("/basebin/systemhook.dylib"), 1);
     }
 */
 
+    // Restoration deliberately removes bootstrap root. Prepare the first
+    // reboot now; finalize releases it only after cleanup returns successfully.
+    if (_bootstrapIdentityActive) {
+        int rebootResult = [[DOEnvironmentManager sharedManager] prepareBootstrapUserspaceReboot];
+        if (rebootResult != 0) {
+            [[DOEnvironmentManager sharedManager] cancelPreparedUserspaceReboot];
+            *errOut = [NSError errorWithDomain:NSPOSIXErrorDomain code:rebootResult
+                                    userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"Failed to prepare userspace reboot: %d", rebootResult]}];
+            [self cleanUpPostExploitation];
+            return;
+        }
+    }
     roothide_stage_log("activation.cleanup.begin");
     *errOut = [self cleanUpPostExploitation];
     roothide_stage_log("activation.cleanup.end error=%s", *errOut ? (*errOut).description.UTF8String : "none");
-    if (*errOut) return;
+    if (*errOut) {
+        [[DOEnvironmentManager sharedManager] cancelPreparedUserspaceReboot];
+        return;
+    }
     
     //printf("Starting launch daemons...\n");
     //exec_cmd_trusted(JBROOT_PATH("/usr/bin/launchctl"), "bootstrap", "system", JBROOT_PATH("/Library/LaunchDaemons"), NULL);
