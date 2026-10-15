@@ -8,6 +8,10 @@
 #include <libjailbreak/kcall_Fugu14.h>
 #include <libjailbreak/kcall_arm64.h>
 #include <unistd.h>
+#include <errno.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <sys/wait.h>
 
 int posix_spawnattr_set_registered_ports_np(posix_spawnattr_t *__restrict attr, mach_port_t portarray[], uint32_t count);
 
@@ -64,39 +68,55 @@ int boomerang_recoverPrimitives(bool firstRetrieval, bool shouldEndBoomerang)
 {
 	// Mach port to boomerang should be stored in our registeredPorts[2]
 	// Use it to recover primitives, afterwards replace it with MACH_PORT_NULL to make launchd happy
-	mach_port_t *registeredPorts;
+	mach_port_t *registeredPorts = NULL;
 	mach_msg_type_number_t registeredPortsCount = 0;
 	if (mach_ports_lookup(mach_task_self(), &registeredPorts, &registeredPortsCount) != 0 || registeredPortsCount < 3) return -1;
 	mach_port_t boomerangPort = registeredPorts[2];
-	if (boomerangPort == MACH_PORT_NULL) return -2;
+	if (!MACH_PORT_VALID(boomerangPort)) return -2;
 	jbclient_xpc_set_custom_port(boomerangPort);
 	registeredPorts[2] = MACH_PORT_NULL;
-	mach_ports_register(mach_task_self(), registeredPorts, registeredPortsCount);
-
-	// Recover boomerang pid from environment
-	pid_t boomerangPid = 0;
-	const char *pidBuf = getenv("BOOMERANG_PID");
-	if (pidBuf) {
-		boomerangPid = atoi(pidBuf);
-		unsetenv("BOOMERANG_PID");
-	}
+	int result = mach_ports_register(mach_task_self(), registeredPorts, registeredPortsCount);
+	if (result != KERN_SUCCESS) return result;
 
 	// Retrieve primitives
 	// For performance reasons we only use physrw_pte until the first userspace reboot
 	// Handing off full physrw from the app is really slow and causes watchdog timeouts
 	// But from launchd it's generally fine, no clue why
 	bool physrwPTE = firstRetrieval && !is_kcall_available();
-	jbclient_initialize_primitives_internal(physrwPTE);
+	result = jbclient_initialize_primitives_internal(physrwPTE);
+	if (result != 0) return result;
 
 	if (shouldEndBoomerang) {
 		// Send done message to boomerang
-		jbclient_boomerang_done();
+		result = jbclient_boomerang_done();
+		if (result != 0) return result;
+
+		// Keep the helper identity until recovery and DONE both succeed. Only
+		// a complete, positive PID is safe for launchd's child cleanup.
+		pid_t boomerangPid = 0;
+		const char *pidBuf = getenv("BOOMERANG_PID");
+		if (pidBuf) {
+			char *end = NULL;
+			errno = 0;
+			long parsedPid = strtol(pidBuf, &end, 10);
+			if (errno == 0 && pidBuf[0] >= '0' && pidBuf[0] <= '9' &&
+			    end && *end == '\0' && parsedPid > 1 && parsedPid <= INT_MAX) {
+				boomerangPid = (pid_t)parsedPid;
+			}
+			unsetenv("BOOMERANG_PID");
+		}
 
 		// Remove boomerang zombie proc if needed
-		if (boomerangPid != 0) {
-			int boomerangStatus;
-			waitpid(boomerangPid, &boomerangStatus, WEXITED);
-			waitpid(boomerangPid, &boomerangStatus, 0);
+		if (boomerangPid > 1) {
+			int boomerangStatus = 0;
+			pid_t waited;
+			do {
+				// launchd reaps SIGCHLD if the helper has not exited yet.
+				waited = waitpid(boomerangPid, &boomerangStatus, WNOHANG);
+			} while (waited == -1 && errno == EINTR);
+			if (waited == -1 && errno != ECHILD) {
+				JBLogError("failed to reap boomerang pid=%d errno=%d", boomerangPid, errno);
+			}
 		}
 	}
 
