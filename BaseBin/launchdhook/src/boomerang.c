@@ -12,6 +12,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <sys/wait.h>
+#include <signal.h>
 
 int posix_spawnattr_set_registered_ports_np(posix_spawnattr_t *__restrict attr, mach_port_t portarray[], uint32_t count);
 
@@ -20,48 +21,135 @@ int posix_spawnattr_set_registered_ports_np(posix_spawnattr_t *__restrict attr, 
 #define JB_PRIMITIVE_STORAGE_RETRIEVE_PHYSRW 1
 #define JB_PRIMITIVE_STORAGE_RETRIEVE_KCALL 2
 
-void boomerang_stashPrimitives()
+static void terminateFailedBoomerang(pid_t pid)
 {
+	if (pid <= 1) return;
+	int status = 0;
+	pid_t waited;
+	do {
+		waited = waitpid(pid, &status, WNOHANG);
+	} while (waited == -1 && errno == EINTR);
+	// A reaped child, or ECHILD, must never turn into a signal to a reused PID.
+	if (waited != 0) return;
+	int result;
+	do {
+		result = kill(pid, SIGKILL);
+	} while (result == -1 && errno == EINTR);
+	if (result != 0 && errno != ESRCH) {
+		JBLogError("failed to terminate boomerang pid=%d errno=%d", pid, errno);
+	}
+	do {
+		waited = waitpid(pid, &status, WNOHANG);
+	} while (waited == -1 && errno == EINTR);
+	// launchd's SIGCHLD handling reaps the child if SIGKILL is still pending.
+}
+
+int boomerang_stashPrimitives(void)
+{
+	__block bool handoffComplete = false;
 	dispatch_semaphore_t boomerangDone = dispatch_semaphore_create(0);
-
+	dispatch_semaphore_t serverStopped = dispatch_semaphore_create(0);
+	dispatch_queue_t serverQueue = dispatch_queue_create("com.roothide.reboot-handoff", DISPATCH_QUEUE_SERIAL);
 	mach_port_t serverPort = MACH_PORT_NULL;
-	mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &serverPort);
-	mach_port_insert_right(mach_task_self(), serverPort, serverPort, MACH_MSG_TYPE_MAKE_SEND);
+	int result = ENOMEM;
+	if (!boomerangDone || !serverStopped || !serverQueue) goto setup_failed;
+	result = EIO;
+	if (mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &serverPort) != KERN_SUCCESS) goto setup_failed;
+	if (mach_port_insert_right(mach_task_self(), serverPort, serverPort, MACH_MSG_TYPE_MAKE_SEND) != KERN_SUCCESS) goto setup_failed;
 
-	// Small server provided to boomerang to obtain exploit primitives
-	dispatch_source_t serverSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_MACH_RECV, (uintptr_t)serverPort, 0, dispatch_get_main_queue());
+	// This hook can wait on launchd's main queue. Receive the helper's RPCs
+	// independently so that the wait cannot prevent their execution.
+	dispatch_source_t serverSource = dispatch_source_create(DISPATCH_SOURCE_TYPE_MACH_RECV, (uintptr_t)serverPort, 0, serverQueue);
+	result = ENOMEM;
+	if (!serverSource) goto setup_failed;
+	// The source keeps its own semaphore references until cancellation drains
+	// its handlers, including when this function returns after a timeout.
+	dispatch_retain(boomerangDone);
+	dispatch_retain(serverStopped);
 	dispatch_source_set_event_handler(serverSource, ^{
+		if (handoffComplete) return;
 		xpc_object_t xdict = NULL;
-		if (!xpc_pipe_receive(serverPort, &xdict)) {
+		if (!xpc_pipe_receive(serverPort, &xdict) && xdict) {
 			if (jbserver_received_boomerang_xpc_message(&gBoomerangServer, xdict) == JBS_BOOMERANG_DONE) {
+				handoffComplete = true;
 				dispatch_semaphore_signal(boomerangDone);
 			}
-			xpc_release(xdict);
 		}
+		if (xdict) xpc_release(xdict);
+	});
+	dispatch_source_set_cancel_handler(serverSource, ^{
+		mach_port_destroy(mach_task_self(), serverPort);
+		dispatch_semaphore_signal(serverStopped);
+		dispatch_release(boomerangDone);
+		dispatch_release(serverStopped);
 	});
 	dispatch_resume(serverSource);
+	dispatch_release(serverQueue);
 
 	// Spawn boomerang process
 	pid_t boomerangPid = 0;
 	posix_spawnattr_t attr = NULL;
-	int attrResult = posix_spawnattr_init(&attr);
-	if (attrResult != 0) {
-		return;
+	result = posix_spawnattr_init(&attr);
+	if (result == 0) {
+		result = posix_spawnattr_set_registered_ports_np(&attr, (mach_port_t[]){ MACH_PORT_NULL, MACH_PORT_NULL, serverPort }, 3);
+		if (result == 0) {
+			const char *path = JBROOT_PATH("/basebin/boomerang");
+			char *argv[] = { (char *)path, NULL };
+			char *envp[] = { NULL };
+			result = posix_spawn(&boomerangPid, path, NULL, &attr, argv, envp);
+		}
+		posix_spawnattr_destroy(&attr);
 	}
-	posix_spawnattr_set_registered_ports_np(&attr, (mach_port_t[]){ MACH_PORT_NULL, MACH_PORT_NULL, serverPort }, 3);
-	int ret = posix_spawn(&boomerangPid, JBROOT_PATH("/basebin/boomerang"), NULL, &attr, NULL, NULL);
-	posix_spawnattr_destroy(&attr);
-	if (ret != 0) return;
 
-	// Wait for boomerang to retrieve the primitives from launchd (handled in server above)
-	dispatch_semaphore_wait(boomerangDone, DISPATCH_TIME_FOREVER);
+	if (result == 0) {
+		result = ETIMEDOUT;
+		for (unsigned attempt = 0; attempt < 300; attempt++) {
+			if (dispatch_semaphore_wait(boomerangDone, dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC)) == 0) {
+				result = 0;
+				break;
+			}
+			int status = 0;
+			pid_t waited = waitpid(boomerangPid, &status, WNOHANG);
+			if (waited == boomerangPid || (waited == -1 && errno == ECHILD)) {
+				boomerangPid = 0;
+				result = EIO;
+				break;
+			}
+			if (waited == -1 && errno != EINTR) {
+				result = errno;
+				break;
+			}
+		}
+	}
+	if (result != 0) terminateFailedBoomerang(boomerangPid);
 	dispatch_source_cancel(serverSource);
-	mach_port_deallocate(mach_task_self(), serverPort);
+	// Cancellation owns port destruction. A slow in-flight handler must not
+	// cause a second infinite wait or use a prematurely destroyed receive right.
+	if (dispatch_semaphore_wait(serverStopped, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC)) != 0 && result == 0) {
+		result = ETIMEDOUT;
+		terminateFailedBoomerang(boomerangPid);
+	}
+	dispatch_release(serverSource);
+	dispatch_release(boomerangDone);
+	dispatch_release(serverStopped);
+	if (result != 0) return result;
 
 	// Stash boomerang pid in environment to later be able to call waitpid on it
-	char pidBuf[10];
-	snprintf(pidBuf, 10, "%d", boomerangPid);
-	setenv("BOOMERANG_PID", pidBuf, 1);
+	char pidBuf[32];
+	snprintf(pidBuf, sizeof(pidBuf), "%d", boomerangPid);
+	if (setenv("BOOMERANG_PID", pidBuf, 1) != 0) {
+		int environmentError = errno;
+		terminateFailedBoomerang(boomerangPid);
+		return environmentError ? environmentError : EIO;
+	}
+	return 0;
+
+setup_failed:
+	if (MACH_PORT_VALID(serverPort)) mach_port_destroy(mach_task_self(), serverPort);
+	if (serverQueue) dispatch_release(serverQueue);
+	if (boomerangDone) dispatch_release(boomerangDone);
+	if (serverStopped) dispatch_release(serverStopped);
+	return result;
 }
 
 int boomerang_recoverPrimitives(bool firstRetrieval, bool shouldEndBoomerang)
