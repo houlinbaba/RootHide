@@ -275,7 +275,8 @@ static dispatch_semaphore_t test_drained;
 static dispatch_semaphore_t fake_sem(long n) {
     sem_creates++; if (failure == sem_creates) return NULL; return dispatch_semaphore_create(n);
 }
-#define dispatch_semaphore_create fake_sem
+// Function-like macros let the harness call the real functions as (name)(...).
+#define dispatch_semaphore_create(n) fake_sem(n)
 static dispatch_queue_t fake_queue(const char *label, dispatch_queue_attr_t attr) {
     if (failure == 3) return NULL; return dispatch_queue_create(label, attr);
 }
@@ -290,7 +291,7 @@ static dispatch_time_t short_time(dispatch_time_t now, int64_t delta) {
     assert(delta == 100 * NSEC_PER_MSEC || delta == NSEC_PER_SEC);
     return dispatch_time(now, delta == NSEC_PER_SEC ? 100 * NSEC_PER_MSEC : 10 * NSEC_PER_MSEC);
 }
-#define dispatch_time short_time
+#define dispatch_time(now, delta) short_time(now, delta)
 static void delayed_cancel(dispatch_source_t source, dispatch_block_t handler) {
     dispatch_source_set_cancel_handler(source, ^{
         if (mode == 3) usleep(250000);
@@ -334,6 +335,42 @@ int main(void) {
     reset(0, 3); assert(boomerang_stashPrimitives() == ETIMEDOUT && !published); drained();
     reset(0, 4); assert(!boomerang_stashPrimitives() && !kills); drained();
     puts("PASS: real libdispatch services RPCs with the main thread blocked and safely drains cancellation after sender timeout");
+    return 0;
+}
+'''
+
+WRAPPER_MODEL = r'''
+typedef uint64_t dispatch_time_t;
+typedef void *dispatch_semaphore_t, *dispatch_source_t;
+#define DISPATCH_TIME_NOW 0
+#define NSEC_PER_MSEC 1000000LL
+#define NSEC_PER_SEC 1000000000LL
+static int failure, mode, sem_creates;
+static int ports, attributes, kills, waits, spawn_calls, published, child_reaped, child_killed;
+static dispatch_source_t current_source;
+static dispatch_semaphore_t test_drained;
+static dispatch_semaphore_t dispatch_semaphore_create(long n) { assert(!n); return (void *)1; }
+static dispatch_time_t dispatch_time(dispatch_time_t now, int64_t delta) { assert(!now); return delta; }
+static long dispatch_semaphore_wait(dispatch_semaphore_t sem, dispatch_time_t deadline) {
+    assert(sem && deadline == 2 * NSEC_PER_SEC); return 0;
+}
+static void dispatch_release(dispatch_semaphore_t sem) { assert(sem); }
+'''
+
+WRAPPER_CASES = r'''
+int main(void) {
+    for (int fail = 0; fail <= 2; fail++) {
+        reset(fail, 0);
+        assert(test_drained && sem_creates == 0);
+        assert((dispatch_semaphore_create(0) != NULL) == (fail != 1));
+        assert((dispatch_semaphore_create(0) != NULL) == (fail != 2));
+        assert(sem_creates == 2);
+        assert(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC) == 10 * NSEC_PER_MSEC);
+        assert(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC) == 100 * NSEC_PER_MSEC);
+        drained();
+        assert(sem_creates == 2);
+    }
+    puts("PASS: Darwin harness wrappers inject sender failures while preserving its own semaphore and two-second drain deadline");
     return 0;
 }
 '''
@@ -421,6 +458,25 @@ def main():
                     assert result.returncode != 0, 'broken sender escaped the regression'
                 else:
                     result.check_returncode()
+
+        # Execute the actual Darwin wrapper functions/macros and reset/drain
+        # helpers on every host. Compilation alone cannot catch macro capture.
+        wrappers = '\n'.join([
+            extract(DARWIN, 'static dispatch_semaphore_t fake_sem('),
+            re.search(r'^#define dispatch_semaphore_create\b[^\n]*', DARWIN, re.M).group(),
+            extract(DARWIN, 'static dispatch_time_t short_time('),
+            re.search(r'^#define dispatch_time\b[^\n]*', DARWIN, re.M).group(),
+        ]) + '\n'
+        drain = extract(DARWIN_CASES, 'static void reset(') + '\n' + extract(DARWIN_CASES, 'static void drained(')
+        run(HEADERS + WRAPPER_MODEL + wrappers + drain + WRAPPER_CASES)
+        for fixed, broken in [
+            ('#define dispatch_semaphore_create(n) fake_sem(n)', '#define dispatch_semaphore_create fake_sem'),
+            ('#define dispatch_time(now, delta) short_time(now, delta)', '#define dispatch_time short_time'),
+        ]:
+            mutation = wrappers.replace(fixed, broken)
+            assert mutation != wrappers
+            run(HEADERS + WRAPPER_MODEL + mutation + drain + WRAPPER_CASES, reject=True)
+        print('PASS: wrapper regression rejects both original object-like macro aliases')
 
         model = HEADERS + MODEL + MOCKS + MODEL_TAIL
         run(model + cleanup + sender + MODEL_CASES)
