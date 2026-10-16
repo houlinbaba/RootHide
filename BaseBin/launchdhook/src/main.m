@@ -20,6 +20,7 @@
 #import "boomerang.h"
 #import "update.h"
 #import "jbserver/jbserver_local.h"
+#import "jbserver/jbserver_global.h"
 #import "asl.h"
 
 bool gInEarlyBoot = true;
@@ -149,6 +150,8 @@ __attribute__((constructor)) static void initializer(void)
 
 	cs_allow_invalid(proc_self(), false);
 
+	// Publish only the already determined diagnostic phase, before RPCs can read it.
+	dopamine_runtime_identity_set_first_load(firstLoad);
 	initXPCHooks();
 	initDaemonHooks();
 	initSpawnHooks();

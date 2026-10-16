@@ -20,6 +20,7 @@ UUID_B = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'
 
 FAKE_UUID = r'''
 #include <stdio.h>
+#include <stdatomic.h>
 #include <string.h>
 typedef unsigned char uuid_t[16];
 static int uuid_parse(const char *s,uuid_t out){
@@ -87,7 +88,6 @@ static void roothide_handle_xpc_msg(xpc_object_t o){(void)o;}
 #define JBROOT_PATH(x) x
 #define JBS_DOMAIN_DOPAMINE 5
 #define JBS_DOPAMINE_IS_JAILBROKEN 1
-static bool launchdhookFirstLoad=true;
 static char*read_file_to_string(const char *p){assert(!strcmp(p,"/basebin/.version"));return strdup("legacy-version");}
 static bool dopamine_domain_allowed(audit_token_t t){assert(t==42);return !denied;}
 static int dopamine_get_root(audit_token_t*t){(void)t;forbidden++;abort();}
@@ -121,13 +121,15 @@ static bool unchanged(struct rh_runtime_identity a,struct rh_runtime_identity b)
 }
 int main(void){
  struct rh_runtime_identity value={0},sentinel={0};sentinel.first_load=true;strcpy(sentinel.handler_uuid,"unchanged");
+ assert(jbclient_dopamine_runtime_identity(&value)==RH_RUNTIME_MALFORMED); // phase not yet published
+ dopamine_runtime_identity_set_first_load(true);
  assert(jbclient_dopamine_is_jailbroken()); // old client, new real dispatcher/table
  assert(jbclient_dopamine_runtime_identity(&value)==RH_RUNTIME_REPORTED && value.first_load);
  assert(rh_runtime_identity_matches(&value,"11111111-2222-3333-4444-555555555555","AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"));
  assert(!rh_runtime_identity_matches(&value,"AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE",value.credential_uuid));
  assert(!rh_runtime_identity_matches(&value,value.handler_uuid,value.handler_uuid));
  assert(!rh_runtime_identity_matches(NULL,value.handler_uuid,value.credential_uuid));
- launchdhookFirstLoad=false;assert(jbclient_dopamine_runtime_identity(&value)==RH_RUNTIME_REPORTED && !value.first_load);
+ dopamine_runtime_identity_set_first_load(false);assert(jbclient_dopamine_runtime_identity(&value)==RH_RUNTIME_REPORTED && !value.first_load);
  xpc_object_t reply=jbserver_xpc_send(5,1,NULL);assert(!strcmp(xpc_dictionary_get_string(reply,"version"),"legacy-version") && xpc_dictionary_get_int64(reply,"result")==1);xpc_release(reply);
  jbserver_arg saved=gDopamineDomain.actions[0].args[1];void*handler=gDopamineDomain.actions[0].handler;
  gDopamineDomain.actions[0].args[1]=(jbserver_arg){0};gDopamineDomain.actions[0].handler=old_status;
@@ -281,7 +283,10 @@ def main():
     resolver=noincludes((LIB/'runtime_identity.c').read_text(encoding='utf-8'))
     matches=extract(resolver,'bool rh_runtime_identity_matches(')
     if a.mutant=='accept-mismatch':matches=matches.replace(' || uuid_compare(actual, expected)','')
-    wire=XPC+descriptors+extract(server,'int dopamine_is_jailbroken(')+table+extract(dispatcher,'static bool jbserver_xpc_value_matches_type(')+extract(dispatcher,'int jbserver_received_xpc_message(')+TRANSPORT+parser+extract(client,'enum rh_runtime_identity_status jbclient_dopamine_runtime_identity(')+extract(client,'bool jbclient_dopamine_is_jailbroken(')+matches+CASES
+    phase='static _Atomic int runtimeFirstLoad;\n'+extract(server,'void dopamine_runtime_identity_set_first_load(')
+    main_source=(ROOT/'BaseBin/launchdhook/src/main.m').read_text(encoding='utf-8')
+    assert main_source.index('dopamine_runtime_identity_set_first_load(firstLoad);') < main_source.index('initXPCHooks();')
+    wire=XPC+descriptors+phase+extract(server,'int dopamine_is_jailbroken(')+table+extract(dispatcher,'static bool jbserver_xpc_value_matches_type(')+extract(dispatcher,'int jbserver_received_xpc_message(')+TRANSPORT+parser+extract(client,'enum rh_runtime_identity_status jbclient_dopamine_runtime_identity(')+extract(client,'bool jbclient_dopamine_is_jailbroken(')+matches+CASES
     passed=run('wire',wire)
     image=extract(resolver,'bool rh_image_uuid_for_address(')
     if a.mutant=='ignore-membership':image=image.replace('address < base || address - base >= text->vmsize','address == base')

@@ -7,7 +7,7 @@
 #include <sys/proc_info.h>
 #include <libjailbreak/credentials.h>
 #include <libjailbreak/runtime_identity.h>
-#include <libjailbreak/roothider/common.h>
+#include <stdatomic.h>
 #include <errno.h>
 
 static char *read_file_to_string(const char *path) {
@@ -60,6 +60,13 @@ bool dopamine_domain_allowed(audit_token_t clientToken)
 	return allowed;
 }
 
+static _Atomic int runtimeFirstLoad; // 0 unknown; 1 first load; 2 subsequent load
+
+void dopamine_runtime_identity_set_first_load(bool firstLoad)
+{
+	atomic_store_explicit(&runtimeFirstLoad, firstLoad ? 1 : 2, memory_order_release);
+}
+
 int dopamine_is_jailbroken(char **outVersion, xpc_object_t *outRuntimeIdentity)
 {
 	*outVersion = read_file_to_string(JBROOT_PATH("/basebin/.version"));
@@ -68,7 +75,8 @@ int dopamine_is_jailbroken(char **outVersion, xpc_object_t *outRuntimeIdentity)
 	xpc_object_t metadata = xpc_dictionary_create_empty();
 	if (metadata) {
 		xpc_dictionary_set_uint64(metadata, "format", 1);
-		xpc_dictionary_set_bool(metadata, "first-load", launchdhookFirstLoad);
+		int phase = atomic_load_explicit(&runtimeFirstLoad, memory_order_acquire);
+		if (phase) xpc_dictionary_set_bool(metadata, "first-load", phase == 1);
 		char uuid[37];
 		if (rh_image_uuid_for_address((const void *)dopamine_is_jailbroken, uuid))
 			xpc_dictionary_set_string(metadata, "handler-uuid", uuid);

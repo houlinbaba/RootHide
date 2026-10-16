@@ -5,4 +5,6 @@
 #include <xpc/xpc.h>
 
 int jbserver_received_xpc_message(struct jbserver_impl *server, xpc_object_t xmsg);
+// Diagnostic phase copy, initialized before publishing the XPC hook.
+void dopamine_runtime_identity_set_first_load(bool firstLoad);
 #endif

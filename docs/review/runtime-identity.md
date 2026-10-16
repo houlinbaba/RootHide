@@ -18,6 +18,10 @@ substitute models that established wire result, not a foreign host bool ABI.
 
 Format 1 includes a first-load bool and two UUID strings from addresses of the
 actual status handler and `proc_credential_restore_self` in the server process.
+The constructor publishes an atomic diagnostic copy after determining firstLoad,
+before registering XPC hooks. Before this publication the field is omitted and
+cannot be accepted as a known false phase. The existing activation flag/order is
+unchanged; this copy is only read by diagnostics.
 `dladdr` locates each mapped header (function pointer authentication stripped on
 arm64e). Parse LC_UUID and require membership in the executable header segment;
 unsupported layouts fail closed as unknown. No file is reopened for identity.
