@@ -8,6 +8,7 @@
 #include <mach-o/dyld.h>
 #include <dlfcn.h>
 #include <os/alloc_once_private.h>
+#include <errno.h>
 
 #include "roothider/log.h"
 #include "roothide_stage.h"
@@ -190,7 +191,16 @@ int jbclient_process_checkin(char **rootPathOut, char **bootUUIDOut, char **sand
 {
 	xpc_object_t xreply = jbserver_xpc_send(JBS_DOMAIN_SYSTEMWIDE, JBS_SYSTEMWIDE_PROCESS_CHECKIN, NULL);
 	if (xreply) {
+		xpc_object_t resultObject = xpc_dictionary_get_value(xreply, "result");
+		if (!resultObject || xpc_get_type(resultObject) != XPC_TYPE_INT64) {
+			xpc_release(xreply);
+			return EPROTO;
+		}
 		int64_t result = xpc_dictionary_get_int64(xreply, "result");
+		if (result != 0) {
+			xpc_release(xreply);
+			return (int)result;
+		}
 		const char *rootPath = xpc_dictionary_get_string(xreply, "root-path");
 		const char *bootUUID = xpc_dictionary_get_string(xreply, "boot-uuid");
 		const char *sandboxExtensions = xpc_dictionary_get_string(xreply, "sandbox-extensions");

@@ -64,7 +64,10 @@ extern char **environ;
         _bootstrapNeedsMigration = NO;
         _bootstrapper = [[DOBootstrapper alloc] init];
         if ([self isJailbroken]) {
-            gSystemInfo.jailbreakInfo.rootPath = strdup(jbclient_get_jbroot() ?: "");
+            const char *rootPath = jbclient_get_jbroot();
+            if (!jbinfo(rootPath) && rootPath && rootPath[0] == '/') {
+                jbinfo(rootPath) = strdup(rootPath);
+            }
         }
         else if ([self isInstalledThroughTrollStore]) {
             [self locateJailbreakRoot];
@@ -171,9 +174,9 @@ extern char **environ;
         return NO;
 /************** roothide specific ********/
 
-    uint32_t csFlags = 0;
-    csops(getpid(), CS_OPS_STATUS, &csFlags, sizeof(csFlags));
-    _isJailbroken = (csFlags & CS_PLATFORM_BINARY) != 0;
+    // A confirmed RootHide service describes session state. The App's own
+    // platform flag describes privileges; root actions authenticate separately.
+    _isJailbroken = YES;
     return _isJailbroken;
 }
 
@@ -223,6 +226,12 @@ extern char **environ;
 - (int)runUnsandboxed:(void (^)(void))unsandboxBlock
 {
     @synchronized (self) {
+        if (@available(iOS 17.0, *)) {
+            // Check-in grants bootstrap access. Do not mutate a live iOS 17
+            // credential's hashed MAC label; runAsRoot owns privileged scopes.
+            unsandboxBlock();
+            return 0;
+        }
         if ([self isInstalledThroughTrollStore]) {
             unsandboxBlock();
         }

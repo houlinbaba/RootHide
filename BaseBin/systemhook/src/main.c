@@ -389,6 +389,18 @@ int parse_dyldhook_jbinfo(char **jbRootPathOut, char **bootUUIDOut, char **sandb
 	return 0;
 }
 
+static void hook_dyld_fcntl(void)
+{
+	void *dyldFcntl = litehook_find_symbol(get_dyld_mach_header(), "___fcntl");
+	if (!dyldFcntl) {
+		roothide_app_startup_diagnostic(getprogname(), "dyld_fcntl.lookup.failed", -1);
+		return;
+	}
+	extern int __fcntl(int fd, int op, ...);
+	kern_return_t result = litehook_hook_function(__fcntl, dyldFcntl);
+	roothide_app_startup_diagnostic(getprogname(), "dyld_fcntl.hook.end", result);
+}
+
 __attribute__((constructor)) static void initializer(void)
 {	
 	roothide_app_startup_diagnostic(getprogname(), "constructor.begin", 0);
@@ -442,9 +454,7 @@ __attribute__((constructor)) static void initializer(void)
 
 	// Hook the dyld_shared_cache __fcntl to jump to the dyld __fcntl instead
 	// This makes it so that library validation is also bypassed if someone calls fcntl in userspace to attach a signature manually
-	void *dyld___fcntl = litehook_find_symbol(get_dyld_mach_header(), "___fcntl");
-	extern int __fcntl(int fd, int op, ... /* arg */ );
-	litehook_hook_function(__fcntl, dyld___fcntl);
+	hook_dyld_fcntl();
 
 	// Initialize stuff neccessary for sandbox_apply hook
 	gLibSandboxHandle = dlopen("/usr/lib/libsandbox.1.dylib", RTLD_FIRST | RTLD_LOCAL | RTLD_LAZY);

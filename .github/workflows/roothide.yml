@@ -45,6 +45,7 @@ jobs:
           git -C BaseBin/opainject apply "$GITHUB_WORKSPACE/.github/patches/opainject-build.patch"
           # Backport upstream 3c221609 onto the pinned litehook revision.
           git -C BaseBin/_external/modules/litehook apply "$GITHUB_WORKSPACE/.github/patches/litehook-tpro.patch"
+          git -C BaseBin/_external/modules/litehook apply "$GITHUB_WORKSPACE/.github/patches/litehook-symbol-slide.patch"
 
       - name: Capture source provenance
         run: |
@@ -61,7 +62,7 @@ jobs:
             echo "submodules:"
             git submodule status --recursive
             echo "roothide_patch_inputs:"
-            shasum -a 256 .github/patches/XPF-roothide.patch .github/patches/opainject-build.patch .github/patches/litehook-tpro.patch
+            shasum -a 256 .github/patches/XPF-roothide.patch .github/patches/opainject-build.patch .github/patches/litehook-tpro.patch .github/patches/litehook-symbol-slide.patch
           } > artifacts/source-provenance.txt
           cat artifacts/source-provenance.txt
 
@@ -202,6 +203,9 @@ jobs:
       - name: Litehook TPRO write scope regressions
         run: python3 .github/scripts/test_litehook_tpro.py
 
+      - name: Litehook symbol address and missing-target regressions
+        run: python3 .github/scripts/test_litehook_symbols.py
+
       - name: RootHide persistent stage log regressions
         run: python3 .github/scripts/test_roothide_stage_log.py
 
@@ -231,6 +235,9 @@ jobs:
 
       - name: Settings slow-service snapshot regressions
         run: python3 .github/scripts/test_settings_runtime_snapshot.py
+
+      - name: App check-in grants and active session regressions
+        run: python3 .github/scripts/test_app_checkin.py
 
       - name: Focused build P0-touched targets
         if: env.BUILD_MODE == 'focused'

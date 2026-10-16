@@ -81,7 +81,7 @@ static NSString *DODiagnosticCrashProcess(NSString *name)
     if (![lower.pathExtension isEqualToString:@"ips"] &&
         ![lower.pathExtension isEqualToString:@"crash"] &&
         ![lower hasSuffix:@".ips.ca.synced"] && ![lower hasSuffix:@".ips.synced"]) return nil;
-    for (NSString *process in @[@"sileo", @"roothide"]) {
+    for (NSString *process in @[@"sileo", @"roothide", @"launchd"]) {
         if ([lower hasPrefix:[process stringByAppendingString:@"-"]]) return process;
     }
     return nil;
@@ -140,9 +140,9 @@ static void DOAppendDiagnosticCrashes(NSMutableString *report, NSArray<NSString 
         if (scanned == 4096) [report appendFormat:@"\nCrash directory %@: scan limit reached; selection may be incomplete", directory];
         closedir(dir);
     }
-    for (NSString *process in @[@"sileo", @"roothide"]) {
+    for (NSString *process in @[@"sileo", @"roothide", @"launchd"]) {
         NSArray *items = newest[process];
-        if (!items.count) [report appendFormat:@"\nNo recent %@ crash file found. This does not establish whether the App crashed.", process];
+        if (!items.count) [report appendFormat:@"\nNo recent %@ crash file found. This does not establish whether the process crashed.", process];
         for (NSDictionary *item in items) {
             // Keep each crash file complete or explicitly omit it.
             DOAppendDiagnosticFile(report, item[@"path"], 1024 * 1024, NO);
@@ -180,11 +180,15 @@ static void DOAppendDiagnosticPath(NSMutableString *report, NSString *path)
 static NSString *DORootHideDiagnosticReport(NSString *header, NSArray<NSString *> *logs,
                                           NSArray<NSString *> *crashDirectories, NSString *root, NSDate *now)
 {
-    NSMutableString *report = [NSMutableString stringWithFormat:@"RootHide diagnostics\n%@\nExported: %@\nOnly RootHide stage/startup logs and recent Sileo/RootHide crashes are collected.\nMissing/unreadable files are not proof of success.\n", header, now];
+    NSMutableString *report = [NSMutableString stringWithFormat:@"RootHide diagnostics\n%@\nExported: %@\nCollected: RootHide stage/startup logs, bounded bootstrap APT/dpkg logs and recent Sileo/RootHide/launchd crashes.\nMissing/unreadable files are not proof of success.\n", header, now];
     for (NSString *path in logs) DOAppendDiagnosticFile(report, path, 256 * 1024, YES);
     if (root.length) {
         for (NSString *name in @[@"Dopamine-app-startup-0.log", @"Dopamine-app-startup-501.log"]) {
             NSString *relative = [@"var/mobile/Library/Logs/CrashReporter" stringByAppendingPathComponent:name];
+            DOAppendDiagnosticFile(report, [root stringByAppendingPathComponent:relative], 256 * 1024, YES);
+        }
+        [report appendString:@"\n\n--- Package-manager logs (newest 256 KiB per file) ---"];
+        for (NSString *relative in @[@"var/log/apt/term.log", @"var/log/apt/history.log", @"var/log/dpkg.log"]) {
             DOAppendDiagnosticFile(report, [root stringByAppendingPathComponent:relative], 256 * 1024, YES);
         }
     }
@@ -211,7 +215,7 @@ static NSString *DORootHideDiagnosticReport(NSString *header, NSArray<NSString *
     } else {
         [report appendString:@"\nNo cached jailbreak root. Loader paths could not be inspected."];
     }
-    [report appendString:@"\n\n--- Recent App crashes (up to two per App, last seven days) ---"];
+    [report appendString:@"\n\n--- Recent process crashes (up to two per process, last seven days) ---"];
     DOAppendDiagnosticCrashes(report, DODiagnosticCrashDirectories(crashDirectories, root), now);
     return report.copy;
 }

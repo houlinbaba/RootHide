@@ -589,19 +589,17 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
             glass = [[DOCustomLiquidGlassView alloc] initWithCornerRadius:18.0 baseTintAlpha:0.038];
             glass.userInteractionEnabled = NO;
             glass.materialScale = 0.88;
+            glass.layer.maskedCorners =
+                kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
+                kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+            [glass reloadMaterial];
             self.customGlassSectionBackdropViews[key] = glass;
             [tableView insertSubview:glass atIndex:0];
         }
 
         glass.hidden = NO;
-        glass.frame = CGRectInset(sectionRect, 1.0, 0.5);
-        glass.preferredCornerRadius = 18.0;
-        glass.layer.cornerRadius = 18.0;
-        glass.layer.maskedCorners =
-            kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
-            kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
-        [glass reloadMaterial];
-        [tableView sendSubviewToBack:glass];
+        CGRect frame = CGRectInset(sectionRect, 1.0, 0.5);
+        if (!CGRectEqualToRect(glass.frame, frame)) glass.frame = frame;
     }
 
     [self.customGlassSectionBackdropViews enumerateKeysAndObjectsUsingBlock:^(NSNumber *key, DOCustomLiquidGlassView *glass, BOOL *stop) {
@@ -620,7 +618,6 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     [self customGlassRefreshSectionBackdrops];
     for (UITableViewCell *cell in tableView.visibleCells)
         [self customGlassStyleVisibleCell:cell atIndexPath:[tableView indexPathForCell:cell]];
-    [self customGlassRefreshSectionBackdrops];
 }
 
 - (void)customGlassRefreshPageAppearance
@@ -632,6 +629,10 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     [tableView setNeedsLayout];
     [tableView layoutIfNeeded];
     [self customGlassRefreshSectionBackdrops];
+
+    // Theme/appearance changes refresh filters. Scrolling updates geometry.
+    for (DOCustomLiquidGlassView *glass in self.customGlassSectionBackdropViews.allValues)
+        [glass reloadMaterial];
 
     UIView *backButton = [self.view viewWithTag:0xC653];
     if (backButton)

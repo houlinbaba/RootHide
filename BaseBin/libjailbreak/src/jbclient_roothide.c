@@ -140,15 +140,24 @@ bool jbclient_roothide_jailbroken()
 {
 	bool jailbroken = false;
 
-    xpc_object_t xargs = xpc_dictionary_create_empty();
-	xpc_object_t xreply = jbserver_xpc_send(JBS_DOMAIN_ROOTHIDE, JBS_ROOTHIDE_JAILBROKEN_CHECK, xargs);
-	xpc_release(xargs);
+	xpc_object_t xreply = jbserver_xpc_send(JBS_DOMAIN_ROOTHIDE, JBS_ROOTHIDE_JAILBROKEN_CHECK, NULL);
 	if (xreply) {
-		int64_t result = xpc_dictionary_get_int64(xreply, "result");
-		if(result == 0) {
+		xpc_object_t resultObject = xpc_dictionary_get_value(xreply, "result");
+		xpc_object_t stateObject = xpc_dictionary_get_value(xreply, "jailbroken");
+		bool resultValid = resultObject && xpc_get_type(resultObject) == XPC_TYPE_INT64;
+		bool stateValid = stateObject && xpc_get_type(stateObject) == XPC_TYPE_BOOL;
+		if (resultValid &&
+		    xpc_dictionary_get_int64(xreply, "result") == 0 &&
+		    stateValid) {
 			jailbroken = xpc_dictionary_get_bool(xreply, "jailbroken");
 		}
+		roothide_stage_log("roothide.state.reply result_valid=%d state_valid=%d result=%lld active=%d",
+		                   resultValid, stateValid,
+		                   (long long)(resultValid ? xpc_dictionary_get_int64(xreply, "result") : -1), jailbroken);
 		xpc_release(xreply);
+	}
+	else {
+		roothide_stage_log("roothide.state.reply missing");
 	}
 
 	return jailbroken;

@@ -30,7 +30,8 @@ int main(int argc, char **argv) {
         NSString *root = [base stringByAppendingPathComponent:@"root"];
         NSString *rootCrashes = [root stringByAppendingPathComponent:@"var/mobile/Library/Logs/CrashReporter"];
         NSString *app = [root stringByAppendingPathComponent:@"Applications/RootHide.app"];
-        for (NSString *directory in @[crashes, retired, rootCrashes, app, [root stringByAppendingPathComponent:@"usr/lib"]]) {
+        NSString *apt = [root stringByAppendingPathComponent:@"var/log/apt"];
+        for (NSString *directory in @[crashes, retired, rootCrashes, app, [root stringByAppendingPathComponent:@"usr/lib"], apt]) {
             assert([[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil]);
         }
         NSString *retiredAlias = [base stringByAppendingPathComponent:@"retired-alias"];
@@ -45,6 +46,12 @@ int main(int argc, char **argv) {
         while (large.length < 300000) [large appendString:@"x"];
         [large appendString:@"\nINIT_DLOPEN_ERROR\n"];
         save(initLog, large, 1000000);
+        NSMutableString *aptLog = [NSMutableString stringWithString:@"APT_OLD_OMITTED"];
+        while (aptLog.length < 300000) [aptLog appendString:@"x"];
+        [aptLog appendString:@"\nCHOICY_POSTINST_SELECTED\n"];
+        save([apt stringByAppendingPathComponent:@"term.log"], aptLog, 1000000);
+        save([apt stringByAppendingPathComponent:@"history.log"], @"APT_HISTORY_SELECTED", 1000000);
+        save([root stringByAppendingPathComponent:@"var/log/dpkg.log"], @"DPKG_STATUS_SELECTED", 1000000);
         save([crashes stringByAppendingPathComponent:@"Sileo-old.ips"], @"OLDEST_OMITTED", 999900);
         save([crashes stringByAppendingPathComponent:@"Sileo-new.ips"], @"SILEO_SELECTED", 999990);
         save([retired stringByAppendingPathComponent:@"Sileo-newest.ips"], @"SILEO_RETIRED_SELECTED", 1000000);
@@ -54,6 +61,10 @@ int main(int argc, char **argv) {
         save([crashes stringByAppendingPathComponent:@"OtherApp-new.ips"], @"PRIVATE_OTHER_APP", 1000000);
         save([crashes stringByAppendingPathComponent:@"RootHideHelper-new.ips"], @"PRIVATE_LOOKALIKE", 1000000);
         save([crashes stringByAppendingPathComponent:@"RootHide-new.txt"], @"NOT_CRASH", 1000000);
+        save([crashes stringByAppendingPathComponent:@"launchd-old.ips"], @"LAUNCHD_OLDEST_OMITTED", 999900);
+        save([crashes stringByAppendingPathComponent:@"launchd-new.ips"], @"LAUNCHD_NEW_SELECTED", 999999);
+        save([retired stringByAppendingPathComponent:@"launchd-1792119324.367807-1.ips"], @"LAUNCHD_REFERENCED_SELECTED", 1000000);
+        save([crashes stringByAppendingPathComponent:@"launchdHelper-new.ips"], @"PRIVATE_LAUNCHD_LOOKALIKE", 1000000);
         save([rootCrashes stringByAppendingPathComponent:@"RootHide-rooted.ips"], @"ROOTHIDE_ROOTED_SELECTED", 1000000);
         save([rootCrashes stringByAppendingPathComponent:@"Dopamine-app-startup-501.log"], @"ROOTED_STARTUP_SELECTED", 1000000);
         save([rootCrashes stringByAppendingPathComponent:@"OtherApp-rooted.ips"], @"PRIVATE_ROOTED_OTHER_APP", 1000000);
@@ -64,13 +75,16 @@ int main(int argc, char **argv) {
         assert([report containsString:@"ROOTHIDE_SELECTED"]);
         assert([report containsString:@"ROOTHIDE_ROOTED_SELECTED"]);
         assert([report containsString:@"ROOTED_STARTUP_SELECTED"]);
+        assert([report containsString:@"CHOICY_POSTINST_SELECTED"] && [report containsString:@"APT_HISTORY_SELECTED"]);
+        assert([report containsString:@"DPKG_STATUS_SELECTED"] && ![report containsString:@"APT_OLD_OMITTED"]);
+        assert([report containsString:@"LAUNCHD_NEW_SELECTED"] && [report containsString:@"LAUNCHD_REFERENCED_SELECTED"]);
         assert(DODiagnosticCrashDirectories(@[crashes, crashes], root).count == 3);
         assert([report containsString:@"unreadable (errno="] && [report containsString:@"link="]);
         assert([report containsString:[link stringByAppendingPathComponent:@"usr/lib/libroothide.dylib"]]);
-        for (NSString *secret in @[@"OLDEST_OMITTED", @"ANCIENT_OMITTED", @"FUTURE_OMITTED", @"PRIVATE_OTHER_APP", @"PRIVATE_ROOTED_OTHER_APP", @"PRIVATE_LOOKALIKE", @"NOT_CRASH"]) {
+        for (NSString *secret in @[@"OLDEST_OMITTED", @"ANCIENT_OMITTED", @"FUTURE_OMITTED", @"PRIVATE_OTHER_APP", @"PRIVATE_ROOTED_OTHER_APP", @"PRIVATE_LOOKALIKE", @"NOT_CRASH", @"LAUNCHD_OLDEST_OMITTED", @"PRIVATE_LAUNCHD_LOOKALIKE"]) {
             assert(![report containsString:secret]);
         }
-        assert(report.length < 270000);
+        assert(report.length < 540000);
 
         // Collect alternate Apple crash filenames with the same App/age bounds.
         save([rootCrashes stringByAppendingPathComponent:@"RootHide-new.crash"], @"ROOTHIDE_CRASH_SELECTED", 1000001);
@@ -102,12 +116,13 @@ int main(int argc, char **argv) {
         NSString *empty = DORootHideDiagnosticReport(@"test", @[missingStage], @[missingStage], nil, [NSDate dateWithTimeIntervalSince1970:1000000]);
         assert([empty containsString:@"Crash directory"] && [empty containsString:@"No recent sileo crash file"]);
         assert([empty containsString:@"Missing/unreadable files are not proof of success"]);
+        assert(![empty containsString:@"--- Package-manager logs"]);
         assert([[NSFileManager defaultManager] removeItemAtPath:link error:nil]);
         assert(symlink("/missing-jailbreak-root", link.fileSystemRepresentation) == 0);
         NSMutableString *broken = [NSMutableString string];
         DOAppendDiagnosticPath(broken, link);
         assert([broken containsString:@"link=/missing-jailbreak-root"] && [broken containsString:@"realpath failed"]);
-        puts("PASS: system/bootstrap target crashes, alternate filenames, inode deduplication, newest selection, size bounds, read errors, symlink/FIFO rejection, loader links");
+        puts("PASS: bounded bootstrap APT/dpkg logs, target App/launchd crashes, inode deduplication, age/size bounds, read errors, symlink/FIFO rejection, loader links");
     }
     return 0;
 }
@@ -130,6 +145,10 @@ def main():
     collector = (UI / 'DORootHideDiagnostics.h').read_text(encoding='utf-8')
     assert 'DODiagnosticCrashDirectories(crashDirectories, root)' in collector
     assert 'var/mobile/Library/Logs/CrashReporter/Retired' in collector
+    for relative in ('var/log/apt/term.log', 'var/log/apt/history.log', 'var/log/dpkg.log'):
+        assert f'@"{relative}"' in collector
+    assert '@"launchd"' in collector
+    assert '@"/Library/Logs/CrashReporter"' in export and '@"/var/root/Library/Logs/CrashReporter"' in export
     home = (UI / 'DOMainViewController.m').read_text(encoding='utf-8')
     assert 'identifier:@"roothide-diagnostics"' in home
     assert 'shareRootHideStageLogFromView:self.view' in home

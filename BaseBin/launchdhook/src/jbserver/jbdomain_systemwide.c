@@ -249,9 +249,12 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 	uint32_t csflags = 0;
     csops(pid, CS_OPS_STATUS, &csflags, sizeof(csflags));
 	bool isPlatformProcess = (csflags & CS_PLATFORM_BINARY) != 0;
+	bool isDopamineApp = is_dopamine_app(procPath);
 
 	// Generate sandbox extensions for the requesting process
-	*sandboxExtensionsOut = generate_sandbox_extensions(processToken, isPlatformProcess);
+	// Check-in platformizes Dopamine later. Its authenticated bundle already
+	// needs the writable grant when the certificate App has no platform flag.
+	*sandboxExtensionsOut = generate_sandbox_extensions(processToken, isPlatformProcess || isDopamineApp);
 	if(!(*sandboxExtensionsOut)) {
 		JBLogError("Failed to generate sandbox extensions for process %d", pid);
 	}
@@ -340,7 +343,7 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 	}
 	// For the Dopamine app itself we want to give it a saved uid/gid of 0, unsandbox it and give it CS_PLATFORM_BINARY
 	// This is so that the buttons inside it can work when jailbroken, even if the app was not installed by TrollStore
-	else if (is_dopamine_app(procPath)) {
+	else if (isDopamineApp) {
 		// svuid = 0, svgid = 0
 		if (__builtin_available(iOS 17.0, *)) {
 			struct rh_credential identity;

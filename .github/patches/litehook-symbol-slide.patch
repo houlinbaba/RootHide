@@ -1,0 +1,115 @@
+Backport the vmBase-relative symbol address correction from opa334/litehook
+4f062946a964575694878130acecb7c990baba38 onto the pinned 95863e1 revision.
+Keep the pinned signing API; bound load commands, symbol entries and names.
+https://github.com/opa334/litehook/blob/4f062946a964575694878130acecb7c990baba38/src/litehook.c
+
+diff --git a/src/litehook.c b/src/litehook.c
+--- a/src/litehook.c
++++ b/src/litehook.c
+@@ -1,6 +1,7 @@
+ #include "litehook.h"
+ #include <stdarg.h>
+ #include <stdbool.h>
++#include <stdint.h>
+ #include <stdlib.h>
+ #include <sys/types.h>
+ #include <string.h>
+@@ -180,63 +181,66 @@
+ 
+ void *litehook_find_symbol(const mach_header_u *header, const char *symbolName)
+ {
++	if (!header || !symbolName) return NULL;
+ 	struct symtab_command *symtabCommand = NULL;
+ 	segment_command_u *linkeditSegCommand = NULL;
+-
+-	uint32_t slide = -1;
++	uint64_t vmBase = UINT64_MAX;
+ 
+ 	uint32_t off = 0;
+-	for (uint32_t i = 0; i < header->ncmds && off < header->sizeofcmds; i++) {
++	for (uint32_t i = 0; i < header->ncmds; i++) {
++		if (off > header->sizeofcmds || header->sizeofcmds - off < sizeof(struct load_command)) return NULL;
+ 		struct load_command *lc = (struct load_command *)((uintptr_t)header + sizeof(mach_header_u) + off);
++		if (lc->cmdsize < sizeof(*lc) || lc->cmdsize > header->sizeofcmds - off) return NULL;
+ 
+ 		if (lc->cmd == LC_SYMTAB) {
++			if (lc->cmdsize < sizeof(struct symtab_command)) return NULL;
+ 			symtabCommand = (struct symtab_command *)lc;
+ 		}
+ 		else if (lc->cmd == LC_SEGMENT_U) {
++			if (lc->cmdsize < sizeof(segment_command_u)) return NULL;
+ 			segment_command_u *segCmd = (segment_command_u *)lc;
+-			if (slide == -1) {
+-				slide = (uintptr_t)header - segCmd->vmaddr;
++			if (strncmp(segCmd->segname, "__PAGEZERO", sizeof(segCmd->segname)) && segCmd->vmaddr < vmBase) {
++				vmBase = segCmd->vmaddr;
+ 			}
+ 			if (!strncmp(segCmd->segname, "__LINKEDIT", sizeof(segCmd->segname))) {
+ 				linkeditSegCommand = segCmd;
+ 			}
+ 		}
+-
+-		if (symtabCommand && linkeditSegCommand) break;
+-
+ 		off += lc->cmdsize;
+ 	}
+ 
+-	if (!symtabCommand || !linkeditSegCommand) return NULL;
+-
+-	uint8_t *linkedit = (uint8_t *)((uintptr_t)header + linkeditSegCommand->vmaddr);
+-
+-	nlist_u *syms = (nlist_u *)(linkedit + (symtabCommand->symoff - linkeditSegCommand->fileoff));
+-	char *strtbl = (char *)(linkedit + (symtabCommand->stroff - linkeditSegCommand->fileoff));
++	if (!symtabCommand || !linkeditSegCommand || vmBase == UINT64_MAX) return NULL;
++	if (linkeditSegCommand->vmaddr < vmBase ||
++	    linkeditSegCommand->vmaddr - vmBase > UINTPTR_MAX - (uintptr_t)header) return NULL;
++	if (symtabCommand->symoff < linkeditSegCommand->fileoff ||
++	    symtabCommand->stroff < linkeditSegCommand->fileoff) return NULL;
++	uint64_t symbolsOffset = symtabCommand->symoff - linkeditSegCommand->fileoff;
++	uint64_t stringsOffset = symtabCommand->stroff - linkeditSegCommand->fileoff;
++	uint64_t linkeditSize = linkeditSegCommand->filesize;
++	if (symbolsOffset > linkeditSize ||
++	    symtabCommand->nsyms > (linkeditSize - symbolsOffset) / sizeof(nlist_u) ||
++	    stringsOffset > linkeditSize || symtabCommand->strsize > linkeditSize - stringsOffset) return NULL;
++
++	// vmaddr and n_value are preferred addresses, not offsets from the header.
++	uintptr_t linkeditAddress = (uintptr_t)header + (linkeditSegCommand->vmaddr - vmBase);
++	if (linkeditSize > UINTPTR_MAX - linkeditAddress) return NULL;
++	uint8_t *linkedit = (uint8_t *)linkeditAddress;
++	nlist_u *syms = (nlist_u *)(linkedit + symbolsOffset);
++	char *strtbl = (char *)(linkedit + stringsOffset);
+ 	size_t strtblSize = symtabCommand->strsize;
+ 
+ 	for (uint32_t i = 0; i < symtabCommand->nsyms; i++) {
+ 		nlist_u *symEntry = &syms[i];
+-
+ 		uint32_t stroff = symEntry->n_un.n_strx;
+-		if (stroff >= strtblSize || off == 0) {
+-			continue;
+-		}
+-
+-		if ((symEntry->n_type & N_TYPE) != N_SECT) {
+-			continue;
+-		}
+-
+-		const char* curSymbolName = &strtbl[stroff];
+-		if (curSymbolName[0] == '\x00') {
+-			continue;
+-		}
+-
++		if (!stroff || stroff >= strtblSize || (symEntry->n_type & N_STAB) ||
++		    (symEntry->n_type & N_TYPE) != N_SECT) continue;
++		const char *curSymbolName = &strtbl[stroff];
++		if (!memchr(curSymbolName, '\0', strtblSize - stroff)) continue;
+ 		if (!strcmp(curSymbolName, symbolName)) {
+-			return _litehook_sign_if_executable((void *)((uintptr_t)header + symEntry->n_value));
+-		}
+-	}
+-
++			if (symEntry->n_value < vmBase || symEntry->n_value - vmBase > UINTPTR_MAX - (uintptr_t)header) return NULL;
++			return _litehook_sign_if_executable((void *)((uintptr_t)header + (symEntry->n_value - vmBase)));
++		}
++	}
+ 	return NULL;
+ }
+ 

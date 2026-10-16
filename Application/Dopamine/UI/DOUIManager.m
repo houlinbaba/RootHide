@@ -275,7 +275,8 @@
         @ROOTHIDE_BOOTSTRAP_STAGE_LOG_PATH, @"/var/mobile/Library/Logs/CrashReporter/Dopamine-systemhook-init.log",
         @"/var/mobile/Library/Logs/CrashReporter/Dopamine-app-startup-0.log",
         @"/var/mobile/Library/Logs/CrashReporter/Dopamine-app-startup-501.log"];
-    NSArray *crashDirectories = @[@"/var/mobile/Library/Logs/CrashReporter", @"/var/mobile/Library/Logs/CrashReporter/Retired"];
+    NSArray *crashDirectories = @[@"/var/mobile/Library/Logs/CrashReporter", @"/var/mobile/Library/Logs/CrashReporter/Retired",
+        @"/Library/Logs/CrashReporter", @"/var/root/Library/Logs/CrashReporter"];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         NSString *report = DORootHideDiagnosticReport(header, logs, crashDirectories, root, [NSDate date]);
         NSString *directory = [NSTemporaryDirectory() stringByAppendingPathComponent:[@"RootHideDiagnostics-" stringByAppendingString:NSUUID.UUID.UUIDString]];
