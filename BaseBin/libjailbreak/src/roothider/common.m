@@ -150,19 +150,11 @@ int proc_paused(pid_t pid, bool* paused)
 
 int unrestrict(pid_t pid, int (*callback)(pid_t), bool resume)
 {
-	// Bound only preparation. The callback remains synchronous: its target is
-	// never abandoned or resumed while patch work is still in flight.
-	struct timespec deadline;
-	if (clock_gettime(CLOCK_MONOTONIC, &deadline) != 0) return errno ? errno : EIO;
-	deadline.tv_sec += 10;
+	// DONE precedes launchd's basebin update and SETEXEC. There is no bounded
+	// interval to the target pause, nor a post-DONE abort protocol. A local
+	// timer here can strand launchd after its old image has committed to exec.
+	// Keep the baseline wait until that protocol exists; F3 remains unresolved.
 	while(true) {
-		struct timespec now;
-		if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return errno ? errno : EIO;
-		if (now.tv_sec > deadline.tv_sec ||
-		    (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec)) {
-			JBLogError("Timed out preparing process(%d)", pid);
-			return ETIMEDOUT;
-		}
 		bool paused = false;
 		if (proc_paused(pid, &paused) != 0) {
 			JBLogError("Failed to check if process(%d) is paused", pid);
@@ -171,12 +163,9 @@ int unrestrict(pid_t pid, int (*callback)(pid_t), bool resume)
 		if(paused) {
 			//wait for process to be fully initialized (new task ipc enabling, csflags updating, etc.)
 			if (usleep(100*1000) != 0) return errno ? errno : EIO;
-			// The pause may have been lost while preparing. Never start a
-			// patch after the deadline or on a target now reported running.
+			// The pause may have been lost while preparing. Do not patch a
+			// target now reported running.
 			if (proc_paused(pid, &paused) != 0) return -1;
-			if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return errno ? errno : EIO;
-			if (now.tv_sec > deadline.tv_sec ||
-			    (now.tv_sec == deadline.tv_sec && now.tv_nsec >= deadline.tv_nsec)) return ETIMEDOUT;
 			if (paused) break;
 		}
         usleep(10*1000);

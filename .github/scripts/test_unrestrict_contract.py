@@ -126,6 +126,31 @@ MODES = {0: 'normal', 1: 'never-pauses', 2: 'query-failure', 3: 'callback-failur
          10: 'late-synchronous-callback', 11: 'interrupted-preparation',
          12: 'recheck-query-failure', 13: 'late-query-result'}
 
+# Separate correction contract. The original bounded-wait assertions above
+# remain the default and still FAIL: an unbounded wait is not F3 closure.
+CORRECTION_CASES = r'''
+int main(int argc,char **argv) {
+    if(argc!=2)return 4;
+    mode=atoi(argv[1]);
+    int result=unrestrict(42,test_callback,mode!=5);
+    if(mode==2 || mode==12) {
+        if(result!=-1 || callbacks || resumes)return fail("query error/ownership");
+    } else if(mode==3) {
+        if(result!=47 || callbacks!=1 || resumes)return fail("callback error/ownership");
+    } else if(mode==4) {
+        if(result!=EPERM || callbacks!=1 || resumes!=1)return fail("resume error propagation");
+    } else if(mode==11) {
+        if(result!=EINTR || callbacks || resumes)return fail("preparation failure");
+    } else {
+        if(result || callbacks!=1 || resumes!=(mode==5?0:1))return fail("late preparation must complete");
+    }
+    if(clock_calls)return fail("unsupported preparation timer remains");
+    printf("case=%d result=%d callbacks=%d resumes=%d virtual_ms=%lld\n",
+        mode,result,callbacks,resumes,(long long)milliseconds);
+    return 0;
+}
+'''
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -135,6 +160,8 @@ def main():
     parser.add_argument('--workdir', type=Path)
     parser.add_argument('--mutations', action='store_true')
     parser.add_argument('--darwin-headers', action='store_true')
+    parser.add_argument('--regression-correction', action='store_true',
+                        help='Only validate deadline regression correction; does not certify F3')
     args = parser.parse_args()
     function = extract(args.source.read_text(encoding='utf-8'), 'int unrestrict(')
     cc = [str(args.zig.resolve()), 'cc'] if args.zig else ['cc']
@@ -142,6 +169,7 @@ def main():
     if sys.platform == 'darwin':
         flags += ['-fsanitize=address,undefined']
     results = {'provenance': 'independently rebuilt', 'source': str(args.source), 'cases': [], 'mutations': []}
+    cases_source = CORRECTION_CASES if args.regression_correction else CASES
     context = nullcontext(args.workdir.resolve()) if args.workdir else tempfile.TemporaryDirectory(prefix='unrestrict-contract-')
     with context as directory:
         folder = Path(directory)
@@ -149,11 +177,13 @@ def main():
         program = folder / ('contract.exe' if sys.platform == 'win32' else 'contract')
 
         def compile_fn(body, extra=None):
-            source.write_text(PREFIX + body + CASES, encoding='utf-8')
+            source.write_text(PREFIX + body + cases_source, encoding='utf-8')
             subprocess.run(cc + flags + (extra or []) + [str(source), '-o', str(program)], check=True)
 
         compile_fn(function)
         for mode, name in MODES.items():
+            if args.regression_correction and mode in (1, 9):
+                continue  # separately observed below, never labelled as safe
             result = subprocess.run([str(program), str(mode)], capture_output=True, text=True, timeout=5)
             results['cases'].append(dict(name=name, exit_code=result.returncode, stdout=result.stdout, stderr=result.stderr))
             print(f'{name}: {"PASS" if result.returncode == 0 else "FAIL"} {result.stdout.strip()} {result.stderr.strip()}', flush=True)
@@ -166,6 +196,9 @@ def main():
                 ('ignore-callback-error', 'return ret;', 'return 0;', 3),
                 ('skip-preparation', 'usleep(100*1000)', 'usleep(0)', 0),
             ]
+            if args.regression_correction:
+                mutations = [entry for entry in mutations if entry[0] != 'remove-deadline']
+                mutations.append(('skip-pause-recheck', 'if (proc_paused(pid, &paused) != 0) return -1;', '', 12))
             for name, old, new, mode in mutations:
                 if old not in function:
                     raise AssertionError('mutation target missing: ' + name)
@@ -178,11 +211,23 @@ def main():
                 print(f'mutation {name}: {"REJECTED" if rejected else "ESCAPED"}', flush=True)
                 all_pass = all_pass and rejected
         if args.darwin_headers and all_pass:
-            source.write_text(PREFIX + function + CASES, encoding='utf-8')
+            source.write_text(PREFIX + function + cases_source, encoding='utf-8')
             for target in ['aarch64-macos', 'x86_64-macos']:
                 subprocess.run(cc + flags + ['-target', target, '-c', str(source), '-o', str(folder / (target + '.o'))], check=True)
             results['darwin_headers'] = 'compiled; not an Apple component build'
         results['acceptance_pass'] = all_pass
+        if args.regression_correction:
+            compile_fn(function)
+            results['known_unbounded'] = []
+            for mode in (1,9):
+                r = subprocess.run([str(program),str(mode)],capture_output=True,text=True,timeout=5)
+                observed = r.returncode == 3 and 'HARNESS_GUARD' in r.stderr
+                results['known_unbounded'].append(dict(name=MODES[mode],observed=observed,
+                    exit_code=r.returncode,stdout=r.stdout,stderr=r.stderr))
+                all_pass = all_pass and observed
+            results['correction_pass'] = all_pass
+            results['acceptance_pass'] = False
+            results['limits'] = 'F3 remains FAIL: baseline unbounded preparation and post-DONE failure ownership remain unresolved.'
         if args.output:
             args.output.write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding='utf-8')
         return 0 if all_pass else 1

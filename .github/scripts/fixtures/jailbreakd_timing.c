@@ -44,11 +44,11 @@ static int posix_spawnattr_destroy(posix_spawnattr_t *a){assert(*a);attributes_l
 static int posix_spawn(pid_t *p,const char *s,const void *f,const posix_spawnattr_t *a,char *const av[],char *const ev[]){
     (void)s;(void)f;(void)av;(void)ev;assert(*a && registered_port);*p=520;child_alive=true;return 0;
 }
-static int test_clock_gettime(int c,struct timespec *ts){(void)c;ts->tv_sec=now_ms/1000;ts->tv_nsec=now_ms%1000*1000000;return 0;}
+static int __attribute__((unused)) test_clock_gettime(int c,struct timespec *ts){(void)c;ts->tv_sec=now_ms/1000;ts->tv_nsec=now_ms%1000*1000000;return 0;}
 #define clock_gettime test_clock_gettime
 static int usleep(unsigned u){now_ms+=u/1000;return 0;}
 static int proc_paused(pid_t p,bool *paused){assert(p==520);if(scenario==4)return -1;*paused=now_ms>=pause_at;child_paused=*paused;return 0;}
-static int proc_patch_dyld(pid_t p){assert(p==520 && child_alive && child_paused);callbacks++;now_ms+=callback_delay;return scenario==5?EIO:0;}
+static int proc_patch_dyld(pid_t p){assert(p==520 && child_alive && child_paused);callbacks++;now_ms+=callback_delay;return (scenario==5 || scenario==8 || scenario==9)?EIO:0;}
 static bool dyld_patch_enabled(void){return true;}
 static int kill(pid_t p,int sig){
     assert(p==520);
@@ -86,10 +86,10 @@ int main(int argc,char **argv){
         block();free((void*)block);
     }
     assert(!attributes_live);
-    if(scenario==0 || scenario==1 || scenario==7){assert(result==0 && callbacks==1 && resumes==1 && !kills);}
-    if(scenario==2 || scenario==3 || scenario==4 || scenario==5){assert(result==5 && kills==1 && !resumes && !child_alive);}
+    if(scenario==0 || scenario==1 || scenario==7 || (!EXPECT_DEADLINE && (scenario==2 || scenario==3))){assert(result==0 && callbacks==1 && resumes==1 && !kills);}
+    if((EXPECT_DEADLINE && (scenario==2 || scenario==3)) || scenario==4 || scenario==5){assert(result==5 && kills==1 && !resumes && !child_alive);}
     if(scenario==6){assert(result==7 && resumes==1 && kills==1 && !child_alive);}
-    if(scenario==2 || scenario==3 || scenario==4)assert(!callbacks);
+    if((EXPECT_DEADLINE && (scenario==2 || scenario==3)) || scenario==4)assert(!callbacks);
     if(scenario==8)assert(result==5 && kills==1 && alive_at_return && !child_alive && deferred==3 && reaps==4);
     if(scenario==9)assert(result==5 && kills==1 && child_alive && deferred==21 && reaps==22);
     bool unsafe=child_alive && result!=0;

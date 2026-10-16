@@ -171,7 +171,7 @@ static int test_clock_gettime(int clock,struct timespec *ts){
 #define clock_gettime test_clock_gettime
 static int test_usleep(unsigned us){pthread_mutex_lock(&lock);int64_t end=now_ms+us/1000;while(now_ms<end)park_locked(end);pthread_mutex_unlock(&lock);return 0;}
 #define usleep test_usleep
-static int proc_paused(pid_t p,bool *paused){assert(p==1);pthread_mutex_lock(&lock);*paused=target_paused;pthread_mutex_unlock(&lock);return 0;}
+static int proc_paused(pid_t p,bool *paused){assert(p==1);pthread_mutex_lock(&lock);if(prepare_at<0)prepare_at=now_ms;*paused=target_paused;pthread_mutex_unlock(&lock);return 0;}
 static int roothide_patch_proc(pid_t p){
     assert(p==1);pthread_mutex_lock(&lock);patches++;patch_at=now_ms;
     int64_t end=now_ms+callback_delay;while(now_ms<end)park_locked(end);pthread_mutex_unlock(&lock);return 0;
@@ -238,6 +238,10 @@ int main(int argc,char **argv){
             int64_t next=INT64_MAX;
             for(int r=0;r<2;r++)if(!finished[r] && parked[r] && wake_at[r]<next)next=wake_at[r];
             if(next!=INT64_MAX && next>now_ms){now_ms=next;notify();}
+            // Baseline ignores SIGCONT failure, enters its server and waits
+            // forever while the target remains paused. Stop the inert model
+            // only after recording this unsupported state; this is not recovery.
+            if(next==INT64_MAX && helper_serving && target_paused){helper_killed=true;notify();}
         }
         if(++iterations>1000000 || now_ms>65000){fputs("HARNESS scheduler failed to quiesce\n",stderr);abort();}
         pthread_cond_wait(&changed,&lock);

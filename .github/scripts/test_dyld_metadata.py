@@ -86,7 +86,7 @@ static int kwrite64(uint64_t a,uint64_t v) { return kwritebuf(a,&v,sizeof(v)); }
 '''
 
 PARENT_PREFIX = r'''
-static int mock_unrestrict_clock(int clock,struct timespec *ts) {
+static int __attribute__((unused)) mock_unrestrict_clock(int clock,struct timespec *ts) {
     assert(clock==CLOCK_MONOTONIC);ts->tv_sec=0;ts->tv_nsec=0;return 0;
 }
 #define clock_gettime mock_unrestrict_clock
