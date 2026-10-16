@@ -304,8 +304,9 @@ static int credential_ready_read(int fd)
         }
         offset += (size_t)n;
     }
-    int result = ready.magic == RH_CREDENTIAL_READY_MAGIC && ready.error >= 0 ? ready.error : EPROTO;
-    rh_failure_note("helper_ready.reply", result == EPROTO ? "protocol_status" : "helper_ready_status", result, result);
+    bool validReply = ready.magic == RH_CREDENTIAL_READY_MAGIC && ready.error >= 0;
+    int result = validReply ? ready.error : EPROTO;
+    rh_failure_note("helper_ready.reply", validReply ? "helper_ready_status" : "protocol_status", result, result);
     return result;
 }
 

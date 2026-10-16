@@ -52,6 +52,10 @@ int main(void){
     require_log("boundary=install","origin=spawn","domain=posix_status",ENOENT,ENOENT);
     init_case();ready_mode=1;assert(dopamine_get_root(&token)==ETIMEDOUT);assert_rolled_back();
     require_log("boundary=install","origin=helper_ready","domain=timeout_status",ETIMEDOUT,ETIMEDOUT);
+    init_case();ready_mode=5;assert(dopamine_get_root(&token)==EPROTO);assert_rolled_back();
+    require_log("boundary=install","origin=helper_ready.reply","domain=helper_ready_status",EPROTO,EPROTO);
+    init_case();ready_mode=6;assert(dopamine_get_root(&token)==EPROTO);assert_rolled_back();
+    require_log("boundary=install","origin=helper_ready.reply","domain=protocol_status",EPROTO,EPROTO);
     init_case();fail_resume=EPERM;assert(dopamine_get_root(&token)==EPERM);assert_rolled_back();
     require_log("boundary=install","origin=resume_helper","domain=posix_errno",EPERM,EPERM);
     init_case();fail_map_at=1;assert(dopamine_get_root(&token)==EIO);assert_rolled_back();
@@ -77,7 +81,7 @@ int main(void){
     rh_failure_note("orphan","status",1,1);
     struct rh_failure_scope next;rh_failure_begin(&next,"next",100);
     failure_log_count=0;assert(!rh_failure_end(&next,"ok","status",0,0) && !failure_log_count);
-    puts("PASS: 20 production credential/caller diagnostic scenarios plus nested-scope, first-error and errno checks");
+    puts("PASS: 22 production credential/caller diagnostic scenarios plus nested-scope, first-error and errno checks");
     return 0;
 }
 '''
@@ -246,9 +250,9 @@ def main():
     p.add_argument('--zig',type=Path)
     p.add_argument('--workdir',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
-    p.add_argument('--mutant',choices=['no-first-log','last-error-wins','clobber-errno'])
+    p.add_argument('--mutant',choices=['no-first-log','last-error-wins','clobber-errno','numeric-error-domain'])
     p.add_argument('--baseline',help='Git revision for before/after diagnostic gate')
-    p.add_argument('--mutations',action='store_true',help='Require 3 deliberately broken diagnostics to fail')
+    p.add_argument('--mutations',action='store_true',help='Require 4 deliberately broken diagnostics to fail')
     a=p.parse_args();folder=a.workdir.resolve();cc=[str(a.zig.resolve()),'cc'] if a.zig else ['cc']
     def read(path):
         return subprocess.check_output(['git','-c','safe.directory='+str(ROOT),'show',a.baseline+':'+str(path.relative_to(ROOT)).replace('\\','/')],text=True,encoding='utf-8') if a.baseline else path.read_text(encoding='utf-8')
@@ -264,6 +268,8 @@ def main():
     prefix=prefix.replace('if (++writes==fail_write_at) return EIO;','if (++writes==fail_write_at) return -83;')
     # This logger deliberately corrupts errno; production finish must restore it.
     prefix=prefix.replace('failure_log_count++;return;','failure_log_count++;errno=EBUSY;return;')
+    prefix=prefix.replace('ready_message=(struct rh_credential_ready){RH_CREDENTIAL_READY_MAGIC,r};',
+        'ready_message=(struct rh_credential_ready){ready_mode==6?0:RH_CREDENTIAL_READY_MAGIC,ready_mode==5?EPROTO:r};')
     runtime=model.runtime_callers()
     if a.baseline:
         current=extract((ROOT/'BaseBin/launchdhook/src/jbserver/jbdomain_dopamine.c').read_text(encoding='utf-8'),'int dopamine_get_root(').replace('__builtin_available(iOS 17.0, *)','1')
@@ -272,7 +278,10 @@ def main():
     runtime=runtime.replace('strcpy(path, "/Applications/Dopamine.app/Dopamine");','if(fail_path){errno=EACCES;return 0;}strcpy(path, "/Applications/Dopamine.app/Dopamine");')
     suffix=model.SUFFIX.replace('int main(void)', 'static int legacy_main(void)')
     # Legacy main refers to this forward declaration; it is not run here.
-    credential=prefix+diag+noincludes(read(LIB/'credentials.c'))+runtime+suffix+model.CALLER_CASES+ROOT_CASES
+    credential_source=noincludes(read(LIB/'credentials.c'))
+    if a.mutant=='numeric-error-domain':
+        credential_source=credential_source.replace('validReply ? "helper_ready_status" : "protocol_status"', 'result == EPROTO ? "protocol_status" : "helper_ready_status"')
+    credential=prefix+diag+credential_source+runtime+suffix+model.CALLER_CASES+ROOT_CASES
     server=SERVER_PREFIX+diag+extract(read(ROOT/'BaseBin/launchdhook/src/jbserver/jbdomain_dopamine.c'),'bool dopamine_domain_allowed(')+extract(read(ROOT/'BaseBin/launchdhook/src/jbserver/jbdomain_systemwide.c'),'int systemwide_process_checkin(')+SERVER_CASES
     client=CLIENT_PREFIX+extract(read(LIB/'jbclient_xpc.c'),'int jbclient_process_checkin(')+extract(read(LIB/'app_checkin.c'),'int jbclient_app_checkin(')+CLIENT_CASES
     cases=[]
@@ -291,7 +300,7 @@ def main():
     passed=all(c['exit_code']==0 for c in cases)
     rejected=[]
     if passed and a.mutations:
-        for mutation in ['no-first-log','last-error-wins','clobber-errno']:
+        for mutation in ['no-first-log','last-error-wins','clobber-errno','numeric-error-domain']:
             subdir=folder/mutation;subdir.mkdir(exist_ok=True)
             command=[sys.executable,str(Path(__file__).resolve()),'--workdir',str(subdir),'--output',str(subdir/'results.json'),'--mutant',mutation]
             if a.zig:command+=['--zig',str(a.zig.resolve())]
