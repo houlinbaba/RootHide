@@ -109,18 +109,22 @@ int dopamine_get_root(audit_token_t *processToken)
 int dopamine_drop_root(audit_token_t *processToken)
 {
 	pid_t pid = audit_token_to_pid(*processToken);
+	struct rh_failure_scope scope;
+	rh_failure_begin(&scope, "drop_root", pid);
 	uint64_t proc = proc_find(pid);
-	if (!proc) return 1;
+	if (!proc) return rh_failure_end(&scope, "find_target", "lookup_bool", 0, 1);
 	if (__builtin_available(iOS 17.0, *)) {
 		struct rh_credential identity;
 		int r = proc_credential_read(proc, &identity);
-		if (r) return r;
-		if (identity.uid != 0) return EPERM;
+		if (r) return rh_failure_end(&scope, "pre_read", "credential_status", r, r);
+		if (identity.uid != 0) return rh_failure_end(&scope, "validate_identity", "policy_status", EPERM, EPERM);
 		char path[PROC_PIDPATHINFO_MAXSIZE];
-		if (proc_pidpath_audittoken(processToken, path, sizeof(path)) <= 0) return ESRCH;
+		int pathResult = proc_pidpath_audittoken(processToken, path, sizeof(path));
+		if (pathResult <= 0) return rh_failure_end(&scope, "target_path", "libproc_return", pathResult, ESRCH);
 		identity.uid = 501;
 		identity.gid = identity.groups[0] = 501;
-		return proc_credential_set(proc, path, &identity);
+		r = proc_credential_set(proc, path, &identity);
+		return rh_failure_end(&scope, "install", "credential_status", r, r);
 	}
 	uint64_t ucred = proc_ucred(proc);
 
@@ -138,10 +142,10 @@ int dopamine_drop_root(audit_token_t *processToken)
 			}
 		}
 
-		return 0;
+		return rh_failure_end(&scope, "legacy_install", "legacy_status", 0, 0);
 	}
 
-	return 1;
+	return rh_failure_end(&scope, "legacy_identity", "legacy_status", 1, 1);
 }
 
 struct jbserver_domain gDopamineDomain = {

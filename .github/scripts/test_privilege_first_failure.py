@@ -35,7 +35,90 @@ static void require_log(const char *boundary,const char *origin,const char *doma
     puts(failure_log);
 }
 static void init_case(void){reset();runtime_server=true;read_calls=fail_read=fail_path=missing_target=0;}
+static void restore_case(void){
+    init_case();runtime_server=false;
+    struct rh_credential launchd={0,0,0,0,0,0,1,{0}};store_identity(new_cred,&launchd);
+}
+static void test_restore_diagnostics(void){
+    struct rh_credential_snapshot s={0};struct rh_failure_scope outer;
+    restore_case();errno=EBADF;
+    assert(proc_credential_restore_self(NULL)==EINVAL && errno==EBADF);
+    require_log("operation=restore_self","origin=validate_snapshot","domain=credential_status",EINVAL,EINVAL);
+    restore_case();assert(proc_credential_restore_self(&s)==EINVAL);
+    require_log("boundary=validate_snapshot","origin=validate_snapshot","domain=credential_status",EINVAL,EINVAL);
+    restore_case();assert(!proc_credential_snapshot_self(&s));
+    uint64_t saved=s.proc;s.proc=donor_proc;
+    assert(proc_credential_restore_self(&s)==EINVAL && s.weakRetained && s.strongRetained);
+    s.proc=saved;assert(!proc_credential_restore_self(&s));assert_rolled_back();
+    restore_case();assert(!proc_credential_snapshot_self(&s));assert(!proc_credential_bootstrap_self());
+    s.strongRetained=false;assert(proc_credential_restore_self(&s)==EINVAL && s.weakRetained);
+    s.strongRetained=true;assert(!proc_credential_restore_self(&s));assert_rolled_back();
+    for(int i=1;i<=11;i++){
+        restore_case();assert(!proc_credential_snapshot_self(&s));assert(!proc_credential_bootstrap_self());
+        read_calls=0;fail_read=i;errno=EBADF;
+        assert(proc_credential_restore_self(&s)==EIO && errno==EBADF);
+        assert(s.weakRetained && s.strongRetained && proc_ucred(target)==new_cred);
+        require_log("boundary=install_original",i<=8?"origin=credential_read.":"origin=install.read_","domain=kernel_io_return",-37,EIO);
+        fail_read=0;assert(!proc_credential_restore_self(&s));assert_rolled_back();
+    }
+    for(int i=1;i<=6;i++){
+        restore_case();assert(!proc_credential_snapshot_self(&s));assert(!proc_credential_bootstrap_self());
+        fail_map_at=map_calls+i;errno=EBADF;
+        assert(proc_credential_restore_self(&s)==EIO && errno==EBADF);
+        require_log(i<=4?"boundary=install_original":"boundary=release_snapshot","origin=credential_ref.map","domain=physaccess_return",-47,EIO);
+        assert(s.weakRetained && s.strongRetained==(i!=6));
+        assert(proc_ucred(target)==(i<=4?new_cred:old_cred));
+        fail_map_at=0;assert(!proc_credential_restore_self(&s));assert_rolled_back();
+    }
+    for(int i=1;i<=4;i++){
+        restore_case();assert(!proc_credential_snapshot_self(&s));assert(!proc_credential_bootstrap_self());
+        fail_write_at=writes+i;errno=EBADF;
+        assert(proc_credential_restore_self(&s)==EIO && errno==EBADF);
+        require_log("boundary=install_original","origin=install.","domain=kernel_io_return",-83,EIO);
+        assert(s.weakRetained && s.strongRetained && proc_ucred(target)==new_cred);
+        fail_write_at=0;assert(!proc_credential_restore_self(&s));assert_rolled_back();
+    }
+    // Publish failure followed by rollback map failure: retain the write as first error.
+    restore_case();assert(!proc_credential_snapshot_self(&s));assert(!proc_credential_bootstrap_self());
+    fail_write_at=writes+4;fail_map_extra=map_calls+5;
+    assert(proc_credential_restore_self(&s)==EIO);
+    require_log("boundary=install_original","origin=install.publish_credential","domain=kernel_io_return",-83,EIO);
+    assert(s.weakRetained && s.strongRetained); // failed rollback is not certified safe/released
+    // Discard only the isolated fake address space; no production recovery claim.
+    s=(struct rh_credential_snapshot){0};
+    // Nested self restore must not consume or overwrite the enclosing request's first error.
+    restore_case();rh_failure_begin(&outer,"outer_restore",100);errno=EACCES;
+    rh_failure_note("outer_first","status",-71,EIO);
+    assert(proc_credential_restore_self(NULL)==EINVAL && errno==EACCES);
+    failure_log_count=0;
+    assert(rh_failure_end(&outer,"outer_end","status",EPERM,EPERM)==EPERM && errno==EACCES);
+    require_log("boundary=outer_end","origin=outer_first","domain=status",-71,EIO);
+    restore_case();assert(!proc_credential_snapshot_self(&s));assert(!proc_credential_bootstrap_self());
+    assert(!proc_credential_restore_self(&s) && !failure_log_count);assert_rolled_back();
+    puts("PASS: self restore early boundaries, 11 reads, 6 ref/release failures, 4 writes, rollback first failure, nested scope and errno");
+}
+static void test_drop_diagnostics(void){
+    audit_token_t token=100;
+    init_case();missing_target=1;assert(dopamine_drop_root(&token)==1);
+    require_log("operation=drop_root","origin=find_target","domain=lookup_bool",0,1);
+    init_case();assert(dopamine_drop_root(&token)==EPERM);
+    require_log("boundary=validate_identity","origin=validate_identity","domain=policy_status",EPERM,EPERM);
+    for(int i=1;i<=8;i++){
+        init_case();store_identity(old_cred,&root);fail_read=i;errno=EBADF;
+        assert(dopamine_drop_root(&token)==EIO && errno==EBADF);
+        require_log("boundary=pre_read","origin=credential_read.","domain=kernel_io_return",-37,EIO);
+    }
+    init_case();store_identity(old_cred,&root);fail_path=1;
+    assert(dopamine_drop_root(&token)==ESRCH && errno==EACCES);
+    require_log("boundary=target_path","origin=target_path","domain=libproc_return",0,ESRCH);
+    init_case();store_identity(old_cred,&root);fail_spawn=ENOENT;
+    assert(dopamine_drop_root(&token)==ENOENT);
+    require_log("boundary=install","origin=spawn","domain=posix_status",ENOENT,ENOENT);
+    init_case();store_identity(old_cred,&root);assert(!dopamine_drop_root(&token) && !failure_log_count);
+    puts("PASS: production drop-root success, lookup, 8 reads, identity, path, install and errno");
+}
 int main(void){
+    test_restore_diagnostics();test_drop_diagnostics();
     audit_token_t token=100;
     init_case();assert(!dopamine_get_root(&token) && !failure_log_count);assert_immutable();
     init_case();missing_target=1;assert(dopamine_get_root(&token)==1 && !spawn_calls);
@@ -250,7 +333,7 @@ def main():
     p.add_argument('--zig',type=Path)
     p.add_argument('--workdir',type=Path,required=True)
     p.add_argument('--output',type=Path,required=True)
-    p.add_argument('--mutant',choices=['no-first-log','last-error-wins','clobber-errno','numeric-error-domain'])
+    p.add_argument('--mutant',choices=['no-first-log','last-error-wins','clobber-errno','numeric-error-domain','no-restore-scope','no-drop-scope'])
     p.add_argument('--baseline',help='Git revision for before/after diagnostic gate')
     p.add_argument('--mutations',action='store_true',help='Require 4 deliberately broken diagnostics to fail')
     a=p.parse_args();folder=a.workdir.resolve();cc=[str(a.zig.resolve()),'cc'] if a.zig else ['cc']
@@ -279,6 +362,17 @@ def main():
     suffix=model.SUFFIX.replace('int main(void)', 'static int legacy_main(void)')
     # Legacy main refers to this forward declaration; it is not run here.
     credential_source=noincludes(read(LIB/'credentials.c'))
+    if a.mutant=='no-restore-scope':
+        body=extract(credential_source,'int proc_credential_restore_self(')
+        broken=body.replace('rh_failure_begin(&scope, "restore_self", 0);','(void)scope;')
+        broken=re.sub(r'rh_failure_end\(&scope, "validate_snapshot", "credential_status", EINVAL, EINVAL\)', 'EINVAL',broken)
+        broken=broken.replace('rh_failure_end(&scope, phase, "credential_status", r, r)','r')
+        assert body!=broken;credential_source=credential_source.replace(body,broken)
+    if a.mutant=='no-drop-scope':
+        body=extract(runtime,'int dopamine_drop_root(')
+        broken=body.replace('rh_failure_begin(&scope, "drop_root", pid);','(void)scope;')
+        broken=re.sub(r'rh_failure_end\(&scope, "[^"]+", "[^"]+", [^,]+, ([^)]+)\)',r'\1',broken)
+        assert body!=broken;runtime=runtime.replace(body,broken)
     if a.mutant=='numeric-error-domain':
         credential_source=credential_source.replace('validReply ? "helper_ready_status" : "protocol_status"', 'result == EPROTO ? "protocol_status" : "helper_ready_status"')
     credential=prefix+diag+credential_source+runtime+suffix+model.CALLER_CASES+ROOT_CASES
@@ -300,7 +394,7 @@ def main():
     passed=all(c['exit_code']==0 for c in cases)
     rejected=[]
     if passed and a.mutations:
-        for mutation in ['no-first-log','last-error-wins','clobber-errno','numeric-error-domain']:
+        for mutation in ['no-first-log','last-error-wins','clobber-errno','numeric-error-domain','no-restore-scope','no-drop-scope']:
             subdir=folder/mutation;subdir.mkdir(exist_ok=True)
             command=[sys.executable,str(Path(__file__).resolve()),'--workdir',str(subdir),'--output',str(subdir/'results.json'),'--mutant',mutation]
             if a.zig:command+=['--zig',str(a.zig.resolve())]

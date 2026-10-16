@@ -61,14 +61,20 @@ static int credential_ref(uint64_t cred, bool strong, bool retain)
     }
     else {
         uint64_t rw = kread_ptr(cred + koffsetof(ucred, rw));
-        if (!rw || kread_ptr(rw + 8) != cred) return EINVAL;
+        if (!rw || kread_ptr(rw + 8) != cred) {
+            rh_failure_note("credential_ref.backlink", "credential_status", EINVAL, EINVAL);
+            return EINVAL;
+        }
         addr = rw + koffsetof(ucred_rw, weak_ref);
         size = sizeof(uint32_t);
     }
     // kaccess_mapped uses the full physrw mapping and cannot be used by a
     // physrw_pte process. Use the active physical accessor, without nesting it.
     uint64_t pa = kvtophys(addr);
-    if (!pa) return EIO;
+    if (!pa) {
+        rh_failure_note("credential_ref.translate", "translation_bool", 0, EIO);
+        return EIO;
+    }
     __block bool changed = false;
     int r = physaccess_mapped(pa, size, ^(void *ptr) {
         changed = strong ? rh_credential_ref64(ptr, retain) : rh_credential_ref32(ptr, retain);
@@ -160,7 +166,7 @@ rollback:
     rollbackError |= kwrite32(proc + koffsetof(proc, svuid), savedIDs[0]);
     rollbackError |= kwrite32(proc + koffsetof(proc, svgid), savedIDs[1]);
     rollbackError |= kwritebuf(tokensAddr, tokens, sizeof(tokens));
-    if (rollbackError) roothide_stage_log("credential.rollback.failed proc=%llx", proc);
+    if (rollbackError) roothide_stage_log("credential.rollback.failed result=%d", rollbackError);
     return r < 0 ? EIO : (r ? r : rollbackError);
 }
 
@@ -220,15 +226,18 @@ int proc_credential_snapshot_self(struct rh_credential_snapshot *snapshot)
         if (releaseError) phase = "release_failed_capture";
     }
 done:
-    roothide_stage_log("credential.snapshot.end phase=%s proc=%llx ucred=%llx weak=%d strong=%d result=%d",
-                       phase, snapshot->proc, snapshot->ucred, snapshot->weakRetained, snapshot->strongRetained, r);
+    roothide_stage_log("credential.snapshot.end phase=%s weak=%d strong=%d result=%d",
+                       phase, snapshot->weakRetained, snapshot->strongRetained, r);
     pthread_mutex_unlock(&credentialLock);
     return r;
 }
 
 int proc_credential_restore_self(struct rh_credential_snapshot *snapshot)
 {
-    if (!snapshot) return EINVAL;
+    struct rh_failure_scope scope;
+    // pid=0 identifies this local self operation without another process lookup.
+    rh_failure_begin(&scope, "restore_self", 0);
+    if (!snapshot) return rh_failure_end(&scope, "validate_snapshot", "credential_status", EINVAL, EINVAL);
     pthread_mutex_lock(&credentialLock);
     const char *phase = "validate_snapshot";
     int r = snapshot->proc && snapshot->ucred && snapshot->proc == proc_self() ? 0 : EINVAL;
@@ -243,10 +252,11 @@ int proc_credential_restore_self(struct rh_credential_snapshot *snapshot)
         phase = "release_snapshot";
         r = credential_snapshot_release(snapshot);
     }
+    rh_failure_note(phase, "credential_status", r, r);
     roothide_stage_log("credential.restore.end phase=%s weak=%d strong=%d result=%d",
                        phase, snapshot->weakRetained, snapshot->strongRetained, r);
     pthread_mutex_unlock(&credentialLock);
-    return r;
+    return rh_failure_end(&scope, phase, "credential_status", r, r);
 }
 
 int proc_credential_bootstrap_self(void)
@@ -267,7 +277,7 @@ int proc_credential_bootstrap_self(void)
         // references and task metadata; never edit its hashed credential/label.
         r = credential_install(proc, donor, &root);
     }
-    roothide_stage_log("credential.bootstrap.end phase=%s proc=%llx donor=%llx result=%d", phase, proc, donor, r);
+    roothide_stage_log("credential.bootstrap.end phase=%s result=%d", phase, r);
     pthread_mutex_unlock(&credentialLock);
     return r;
 }
@@ -463,7 +473,7 @@ done:
         if (release[i] >= 0) close(release[i]);
     }
     credential_reap(pid, donorVersion);
-    roothide_stage_log("credential.set.end phase=%s proc=%llx uid=%u gid=%u helper_pid=%d result=%d", phase, proc, identity->uid, identity->gid, pid, r);
+    roothide_stage_log("credential.set.end phase=%s uid=%u gid=%u helper_pid=%d result=%d", phase, identity->uid, identity->gid, pid, r);
 unlock:
     rh_failure_note(phase, errorDomain, r, r);
     // launchd's activation trace is closed during normal App RPCs. Preserve
