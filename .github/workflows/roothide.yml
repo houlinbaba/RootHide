@@ -11,6 +11,11 @@ on:
         options:
           - focused
           - full
+      single_person_delivery:
+        description: Approved private D1 delivery only (not device authorization)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -36,8 +41,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
           submodules: recursive
+
+      - name: Check approved private delivery scope before building
+        if: inputs.single_person_delivery == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/package_single_person_research.py --preflight
 
       - name: Apply submodule patches
         run: |
@@ -296,8 +307,23 @@ jobs:
 
           python3 .github/scripts/check_d1_apple_components.py --output artifacts/d1-apple-components.json
 
-      # No installable/runtime binary upload while F3/F1 fail. Full packaging
-      # is exercised inside the runner only; the receipt cannot be installed.
+      - name: Collect approved single-person research package
+        if: success() && inputs.single_person_delivery == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/package_single_person_research.py --output artifacts/single-person
+
+      - name: Upload approved private single-person research package
+        if: success() && inputs.single_person_delivery == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-single-person-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/single-person/
+          if-no-files-found: error
+          retention-days: 1
+
+      # Default remains text only; the private opt-in above is the expressly
+      # approved single-person exception, not stable distribution eligibility.
       - name: Upload compile research evidence only
         if: always()
         uses: actions/upload-artifact@v4
