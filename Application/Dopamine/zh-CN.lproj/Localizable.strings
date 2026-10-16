@@ -149,4 +149,12 @@
 "Settings_Disable_Update" = "禁用更新检测";
 "Menu_Share_RootHide_Log" = "导出 RootHide 日志";
 "RootHide_Log_Unavailable" = "没有可导出的 RootHide 阶段日志。";
+"Runtime_Identity_Title" = "查询运行中组件";
+"Runtime_Identity_Reported" = "服务报告的已映射组件身份（尚未与构建清单比对）。UUID 仅用于构建归属，不是可信证明。firstLoad 仅为本服务的阶段事实，不代表 READY 或同一激活会话。";
+"Runtime_Identity_Unsupported" = "服务不支持此诊断格式，既有功能保持原行为。";
+"Runtime_Identity_Unknown" = "服务无法识别全部执行映像，运行版本仍未知。";
+"Runtime_Identity_Malformed" = "诊断回复缺失或格式错误，运行版本仍未知。";
+"Runtime_Identity_No_Reply" = "未取得可用回复，不能据此判断旧服务、授权拒绝或具体 POSIX 错误。";
+"Runtime_Identity_Timeout" = "等待 5 秒后停止界面等待，未取消远端查询。仅在查询返回或退出 App 后才能再查询。";
+"Runtime_Identity_Busy" = "已有一个查询未返回，可能持续到 App 退出。不会继续创建等待任务。";
 "Userspace_Reboot_Failed_Format" = "用户空间重启命令失败（返回值：%d）。请到设置中导出 RootHide 日志。";

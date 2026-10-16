@@ -231,10 +231,14 @@ jobs:
       - name: RootHide privilege first failure diagnostics
         run: |
           mkdir -p "$RUNNER_TEMP/roothide-first-failure"
-          python3 .github/scripts/test_privilege_first_failure.py --workdir "$RUNNER_TEMP/roothide-first-failure" --output "$RUNNER_TEMP/roothide-first-failure/results.json" --mutations
+          python3 .github/scripts/test_privilege_first_failure.py --workdir "$RUNNER_TEMP/roothide-first-failure" --output artifacts/privilege-first-failure-tests.json --mutations
 
       - name: RootHide reboot handoff cancellation regressions
         run: python3 .github/scripts/test_reboot_handoff.py
+
+      - name: Runtime identity compatibility, mapped images and async lifecycle
+        run: |
+          python3 .github/scripts/test_runtime_identity.py --workdir "$RUNNER_TEMP/runtime-identity" --output artifacts/runtime-identity-tests.json --mutations
 
       - name: RootHide first reboot after bootstrap credential restoration
         run: python3 .github/scripts/test_bootstrap_reboot.py
@@ -302,6 +306,8 @@ jobs:
           path: |
             artifacts/source-provenance.txt
             artifacts/d1-apple-components.json
+            artifacts/runtime-identity-tests.json
+            artifacts/privilege-first-failure-tests.json
             docs/review/candidate-status.json
           if-no-files-found: error
           retention-days: 14

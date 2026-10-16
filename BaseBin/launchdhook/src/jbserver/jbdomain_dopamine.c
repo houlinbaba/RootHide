@@ -6,6 +6,8 @@
 #include <libproc.h>
 #include <sys/proc_info.h>
 #include <libjailbreak/credentials.h>
+#include <libjailbreak/runtime_identity.h>
+#include <libjailbreak/roothider/common.h>
 #include <errno.h>
 
 static char *read_file_to_string(const char *path) {
@@ -58,10 +60,23 @@ bool dopamine_domain_allowed(audit_token_t clientToken)
 	return allowed;
 }
 
-bool dopamine_is_jailbroken(char **outVersion)
+int dopamine_is_jailbroken(char **outVersion, xpc_object_t *outRuntimeIdentity)
 {
 	*outVersion = read_file_to_string(JBROOT_PATH("/basebin/.version"));
-	return true;
+	// Optional second output preserves action 1's existing bool result/version.
+	// Both implementation pointers resolve in this server process, not the App.
+	xpc_object_t metadata = xpc_dictionary_create_empty();
+	if (metadata) {
+		xpc_dictionary_set_uint64(metadata, "format", 1);
+		xpc_dictionary_set_bool(metadata, "first-load", launchdhookFirstLoad);
+		char uuid[37];
+		if (rh_image_uuid_for_address((const void *)dopamine_is_jailbroken, uuid))
+			xpc_dictionary_set_string(metadata, "handler-uuid", uuid);
+		if (rh_image_uuid_for_address((const void *)proc_credential_restore_self, uuid))
+			xpc_dictionary_set_string(metadata, "credential-uuid", uuid);
+	}
+	*outRuntimeIdentity = metadata; // dispatcher owns/releases this +1 reference
+	return 1; // Existing wire result, now explicitly matches dispatcher's int ABI.
 }
 
 int dopamine_get_root(audit_token_t *processToken)
@@ -156,6 +171,7 @@ struct jbserver_domain gDopamineDomain = {
 			.handler = dopamine_is_jailbroken,
 			.args = (jbserver_arg[]){
 				{ .name = "version", .type = JBS_TYPE_STRING, .out = true },
+				{ .name = "runtime-identity", .type = JBS_TYPE_DICTIONARY, .out = true },
 				{ 0 },
 			},
 		},

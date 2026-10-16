@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+from test_app_checkin import extract
 
 ROOT = Path(__file__).resolve().parents[2]
 UI = ROOT / 'Application/Dopamine/UI'
@@ -134,7 +135,7 @@ def main():
     parser.add_argument('--check-only', action='store_true')
     args = parser.parse_args()
     source = (UI / 'DOUIManager.m').read_text(encoding='utf-8')
-    export = source.split('- (void)shareRootHideStageLogFromView:', 1)[1].split('- (void)shareLogRecordFromView:', 1)[0]
+    export = extract(source, '- (void)shareRootHideStageLogFromView:')
     assert 'Dopamine-systemhook-init.log' in export
     assert export.index('dispatch_get_global_queue') < export.index('DORootHideDiagnosticReport(')
     assert 'dispatch_get_main_queue' in export and 'completionWithItemsHandler' in export

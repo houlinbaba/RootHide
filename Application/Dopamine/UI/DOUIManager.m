@@ -7,6 +7,7 @@
 
 #import "DOUIManager.h"
 #import "DORootHideDiagnostics.h"
+#import "DORuntimeIdentityQuery.h"
 #import <libjailbreak/info.h>
 #import <libjailbreak/roothide_stage.h>
 #import "DOEnvironmentManager.h"
@@ -308,6 +309,37 @@
             [presenter presentViewController:share animated:YES completion:nil];
         });
     });
+}
+
+- (void)queryRootHideRuntimeIdentityFromView:(UIView *)sourceView
+{
+    if (!sourceView.window) return;
+    __weak UIView *weakView = sourceView;
+    void (^show)(NSString *) = ^(NSString *message) {
+        UIView *view = weakView;
+        UIViewController *presenter = view.window.rootViewController;
+        while (presenter.presentedViewController) presenter = presenter.presentedViewController;
+        if (!presenter) return;
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Runtime_Identity_Title") message:message preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_OK") style:UIAlertActionStyleDefault handler:nil]];
+        [presenter presentViewController:alert animated:YES completion:nil];
+    };
+    BOOL started = DORuntimeIdentityQueryStart(5.0, ^enum rh_runtime_identity_status(struct rh_runtime_identity *out) {
+        return jbclient_dopamine_runtime_identity(out);
+    }, ^(BOOL timedOut, enum rh_runtime_identity_status status, struct rh_runtime_identity value) {
+        if (timedOut) { show(DOLocalizedString(@"Runtime_Identity_Timeout")); return; }
+        switch (status) {
+            case RH_RUNTIME_REPORTED:
+                show([NSString stringWithFormat:@"%@\nfirstLoad=%@\nhandler UUID: %s\ncredential UUID: %s",
+                    DOLocalizedString(@"Runtime_Identity_Reported"), value.first_load ? @"true" : @"false", value.handler_uuid, value.credential_uuid]);
+                break;
+            case RH_RUNTIME_UNSUPPORTED: show(DOLocalizedString(@"Runtime_Identity_Unsupported")); break;
+            case RH_RUNTIME_UNKNOWN_IMAGE: show(DOLocalizedString(@"Runtime_Identity_Unknown")); break;
+            case RH_RUNTIME_MALFORMED: show(DOLocalizedString(@"Runtime_Identity_Malformed")); break;
+            case RH_RUNTIME_NO_REPLY: show(DOLocalizedString(@"Runtime_Identity_No_Reply")); break;
+        }
+    });
+    if (!started) show(DOLocalizedString(@"Runtime_Identity_Busy"));
 }
 
 - (void)shareLogRecordFromView:(UIView *)sourceView

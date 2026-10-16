@@ -9,6 +9,8 @@
 #include <dlfcn.h>
 #include <os/alloc_once_private.h>
 #include <errno.h>
+#include "runtime_identity.h"
+#include <uuid/uuid.h>
 
 #include "roothider/log.h"
 #include "roothide_stage.h"
@@ -564,6 +566,44 @@ int jbclient_boomerang_done(void)
 		return result;
 	}
 	return -1;
+}
+
+static enum rh_runtime_identity_status runtime_identity_parse(xpc_object_t reply, struct rh_runtime_identity *out)
+{
+	if (!reply) return RH_RUNTIME_NO_REPLY;
+	if (xpc_get_type(reply) != XPC_TYPE_DICTIONARY) return RH_RUNTIME_MALFORMED;
+	xpc_object_t result = xpc_dictionary_get_value(reply, "result");
+	if (!result || xpc_get_type(result) != XPC_TYPE_INT64 || xpc_int64_get_value(result) != 1) return RH_RUNTIME_MALFORMED;
+	xpc_object_t meta = xpc_dictionary_get_value(reply, "runtime-identity");
+	if (!meta) return RH_RUNTIME_UNSUPPORTED;
+	if (xpc_get_type(meta) != XPC_TYPE_DICTIONARY) return RH_RUNTIME_MALFORMED;
+	xpc_object_t format = xpc_dictionary_get_value(meta, "format");
+	if (!format || xpc_get_type(format) != XPC_TYPE_UINT64) return RH_RUNTIME_MALFORMED;
+	if (xpc_uint64_get_value(format) != 1) return RH_RUNTIME_UNSUPPORTED;
+	xpc_object_t first = xpc_dictionary_get_value(meta, "first-load");
+	if (!first || xpc_get_type(first) != XPC_TYPE_BOOL) return RH_RUNTIME_MALFORMED;
+	struct rh_runtime_identity value = { .first_load = xpc_bool_get_value(first) };
+	const char *keys[] = { "handler-uuid", "credential-uuid" };
+	char *outputs[] = { value.handler_uuid, value.credential_uuid };
+	for (unsigned i = 0; i < 2; i++) {
+		xpc_object_t field = xpc_dictionary_get_value(meta, keys[i]);
+		if (!field) return RH_RUNTIME_UNKNOWN_IMAGE;
+		if (xpc_get_type(field) != XPC_TYPE_STRING) return RH_RUNTIME_MALFORMED;
+		uuid_t uuid;
+		if (uuid_parse(xpc_string_get_string_ptr(field), uuid) || uuid_is_null(uuid)) return RH_RUNTIME_MALFORMED;
+		uuid_unparse_upper(uuid, outputs[i]);
+	}
+	*out = value;
+	return RH_RUNTIME_REPORTED;
+}
+
+enum rh_runtime_identity_status jbclient_dopamine_runtime_identity(struct rh_runtime_identity *out)
+{
+	if (!out) return RH_RUNTIME_MALFORMED;
+	xpc_object_t reply = jbserver_xpc_send(JBS_DOMAIN_DOPAMINE, JBS_DOPAMINE_IS_JAILBROKEN, NULL);
+	enum rh_runtime_identity_status status = runtime_identity_parse(reply, out);
+	if (reply) xpc_release(reply);
+	return status;
 }
 
 bool jbclient_dopamine_is_jailbroken(void)

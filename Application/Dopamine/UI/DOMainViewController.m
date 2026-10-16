@@ -2139,6 +2139,9 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
         [UIAction actionWithTitle:DOLocalizedString(@"Menu_Share_RootHide_Log") image:[UIImage systemImageNamed:@"square.and.arrow.up" withConfiguration:[DOGlobalAppearance smallIconImageConfiguration]] identifier:@"roothide-diagnostics" handler:^(__kindof UIAction * _Nonnull action) {
             [[DOUIManager sharedInstance] shareRootHideStageLogFromView:self.view];
         }],
+        [UIAction actionWithTitle:DOLocalizedString(@"Runtime_Identity_Title") image:[UIImage systemImageNamed:@"info.circle" withConfiguration:[DOGlobalAppearance smallIconImageConfiguration]] identifier:@"roothide-runtime-identity" handler:^(__kindof UIAction * _Nonnull action) {
+            [[DOUIManager sharedInstance] queryRootHideRuntimeIdentityFromView:self.view];
+        }],
         [UIAction actionWithTitle:DOLocalizedString(@"Menu_Restart_SpringBoard_Title") image:[UIImage systemImageNamed:@"arrow.clockwise" withConfiguration:[DOGlobalAppearance smallIconImageConfiguration]] identifier:@"respring" handler:^(__kindof UIAction * _Nonnull action) {
             [[DOEnvironmentManager sharedManager] respring];
         }],

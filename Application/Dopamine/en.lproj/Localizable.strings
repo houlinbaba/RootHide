@@ -152,5 +152,13 @@
 "Settings_Disable_Update" = "Disable Update";
 "Menu_Share_RootHide_Log" = "Share RootHide Log";
 "RootHide_Log_Unavailable" = "No saved RootHide stage log is available.";
+"Runtime_Identity_Title" = "Query Running Components";
+"Runtime_Identity_Reported" = "Service-reported mapped image identities (not matched to a build). UUID is attribution, not attestation. firstLoad is a local phase fact, not READY or an activation session identity.";
+"Runtime_Identity_Unsupported" = "The service does not provide this diagnostic format. Existing features are unaffected.";
+"Runtime_Identity_Unknown" = "The service could not identify both executing images. Running build remains unknown.";
+"Runtime_Identity_Malformed" = "The diagnostic reply is incomplete or invalid. Running build remains unknown.";
+"Runtime_Identity_No_Reply" = "No usable service reply. This does not identify an old service, authorization denial or a POSIX error.";
+"Runtime_Identity_Timeout" = "Stopped waiting after 5 seconds. The remote query was not canceled. Another query can start only after it returns or the App exits.";
+"Runtime_Identity_Busy" = "One query is still pending. It may remain pending until the App exits; additional workers will not be started.";
 "RootHide_Log_Export_Failed" = "Could not create the RootHide diagnostic export. Try again.";
 "Userspace_Reboot_Failed_Format" = "The userspace reboot command failed (result: %d). Open Settings and share the RootHide log.";
