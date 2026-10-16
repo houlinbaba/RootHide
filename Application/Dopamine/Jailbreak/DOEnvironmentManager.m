@@ -440,51 +440,56 @@ extern char **environ;
 
 - (void)respring
 {
-    // D1 sequencing: let jbctl wait until the app has left the temporary
-    // root/unsandboxed critical sections before it performs the respring.
-    [self spawnJbctlAsRootWithArgs:@[@"respring"]];
+    [self performRestartAction:@"respring"];
 }
 
 - (void)rebootUserspace
 {
-    // Same sequencing rule as respring. The --waitfor pipe is handled by
-    // spawnJbctlAsRootWithArgs:, while older installed jbctl versions keep
-    // using the compatibility path inside that helper.
+    [self performRestartAction:@"reboot_userspace"];
+}
+
+- (void)performRestartAction:(NSString *)command
+{
     if (![NSThread isMainThread]) {
-        dispatch_async(dispatch_get_main_queue(), ^{ [self rebootUserspace]; });
+        dispatch_async(dispatch_get_main_queue(), ^{ [self performRestartAction:command]; });
         return;
     }
-    // Serialize requests on the main queue, keeping the UI and log export
-    // responsive while jbctl waits. A returned success is only a request result.
+    // Both actions share a gate and run off the UI thread. Keep the App visible
+    // until the system restarts it, so a failed request cannot leave a black UI.
+    BOOL userspace = [command isEqualToString:@"reboot_userspace"];
     static BOOL requestInFlight = NO;
     if (requestInFlight) return;
     requestInFlight = YES;
     NSString *logPath = [[DOUIManager sharedInstance] rootHideStageLogPath];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         struct rh_userspace_reboot prepared;
-        @synchronized(self) {
-            prepared = self->_preparedUserspaceReboot;
-            self->_preparedUserspaceReboot = RH_USERSPACE_REBOOT_EMPTY;
+        prepared = RH_USERSPACE_REBOOT_EMPTY;
+        if (userspace) {
+            @synchronized(self) {
+                prepared = self->_preparedUserspaceReboot;
+                self->_preparedUserspaceReboot = RH_USERSPACE_REBOOT_EMPTY;
+            }
         }
         // Append on App relaunch so an incomplete activation is still visible.
         int logResult = roothide_stage_begin(logPath.fileSystemRepresentation, true);
-        roothide_stage_log("userspace_reboot.request log_open_result=%d", logResult);
-        roothide_stage_log("userspace_reboot.spawn.begin uid=%d euid=%d gid=%d",
-                           getuid(), geteuid(), getgid());
+        roothide_stage_log("restart.request command=%s log_open_result=%d", command.UTF8String, logResult);
+        roothide_stage_log("restart.spawn.begin command=%s uid=%d euid=%d gid=%d",
+                           command.UTF8String, getuid(), geteuid(), getgid());
         // Initial activation prepared this child while bootstrap still had
         // root. Release only after restoring the App, without another root RPC.
         int result = prepared.pid > 0 ? rh_userspace_reboot_finish(&prepared) :
-                     [self spawnJbctlAsRootWithArgs:@[@"reboot_userspace"]];
-        roothide_stage_log("userspace_reboot.spawn.end result=%d", result);
-        roothide_stage_log("userspace_reboot.return result=%d", result);
+                     [self spawnJbctlAsRootWithArgs:@[command]];
+        roothide_stage_log("restart.return command=%s result=%d", command.UTF8String, result);
         roothide_stage_end();
         dispatch_async(dispatch_get_main_queue(), ^{
             requestInFlight = NO;
             if (result != 0) {
                 UIViewController *presenter = [UIApplication sharedApplication].keyWindow.rootViewController;
                 while (presenter.presentedViewController) presenter = presenter.presentedViewController;
-                NSString *message = [NSString stringWithFormat:DOLocalizedString(@"Userspace_Reboot_Failed_Format"), result];
-                UIAlertController *alert = [UIAlertController alertControllerWithTitle:DOLocalizedString(@"Menu_Reboot_Userspace_Title") message:message preferredStyle:UIAlertControllerStyleAlert];
+                NSString *message = userspace ? [NSString stringWithFormat:DOLocalizedString(@"Userspace_Reboot_Failed_Format"), result] :
+                    [NSString stringWithFormat:@"%@ (%d)\n%@", [NSError errorWithDomain:NSPOSIXErrorDomain code:result userInfo:nil].localizedDescription, result, DOLocalizedString(@"Menu_Share_RootHide_Log")];
+                NSString *title = DOLocalizedString(userspace ? @"Menu_Reboot_Userspace_Title" : @"Menu_Restart_SpringBoard_Title");
+                UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
                 [alert addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_OK") style:UIAlertActionStyleDefault handler:nil]];
                 [presenter presentViewController:alert animated:YES completion:nil];
             }

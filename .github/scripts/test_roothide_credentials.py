@@ -138,6 +138,7 @@ PREFIX = r'''
 #include <string.h>
 #include <stdlib.h>
 #include <stdatomic.h>
+#include <stdarg.h>
 #include "credential_types.h"
 static long fake_syscall(int, uintptr_t, uintptr_t, uintptr_t);
 #define RH_CREDENTIAL_SYSCALL(n,a,b,c) fake_syscall(n,(uintptr_t)(a),(uintptr_t)(b),(uintptr_t)(c))
@@ -260,6 +261,7 @@ static int kwrite64(uint64_t a,uint64_t b) { return kwritebuf(a,&b,8); }
 static uint64_t proc_ucred(uint64_t p) { return kread_ptr(kread_ptr(p+OFF_proc_proc_ro)+OFF_proc_ro_ucred); }
 static uint64_t proc_self(void) { return runtime_server ? 0x7000 : target; }
 static uid_t geteuid(void) { return runtime_server ? 0 : get32(proc_ucred(target)+OFF_ucred_uid); }
+static bool is_dopamine_app(const char *path) { return !strcmp(path,"/Applications/Dopamine.app/Dopamine"); }
 static uint64_t proc_find(pid_t p) { return p==100 ? target : (p==1 && !launchd_missing) || (p==42 && donor_alive) ? donor_proc : 0; }
 static int proc_get_pidversion(pid_t p) { return p==42 && donor_alive ? 55 : 0; }
 static void proc_allow_all_syscalls(uint64_t p) { assert(p==donor_proc);donor_syscalls_ready=true; }
@@ -273,6 +275,14 @@ static int physaccess_mapped(uint64_t a,uint64_t n,kernel_map_accessor block) {
     block(kmem+a); return 0;
 }
 static void roothide_stage_log(const char *f,...) { (void)f; }
+#define ROOTHIDE_BOOTSTRAP_STAGE_LOG_PATH "/test/bootstrap.log"
+static unsigned runtime_log_count;
+static char runtime_log[512];
+static void roothide_stage_file_log(const char *path,const char *format,...) {
+    assert(!strcmp(path,ROOTHIDE_BOOTSTRAP_STAGE_LOG_PATH));
+    va_list args;va_start(args,format);vsnprintf(runtime_log,sizeof(runtime_log),format,args);va_end(args);
+    runtime_log_count++;
+}
 static int pthread_mutex_lock(pthread_mutex_t *m) { assert(!*m); *m=1; return 0; }
 static int pthread_mutex_unlock(pthread_mutex_t *m) { assert(*m); *m=0; return 0; }
 static int open_fd(void) { assert(fd_next<256); int f=fd_next++; descriptors[f]=true; fd_count++; return f; }
@@ -350,13 +360,16 @@ static long fake_syscall(int n,uintptr_t a,uintptr_t b,uintptr_t c) {
 }
 static int posix_spawn(pid_t *pid,const char *path,const posix_spawn_file_actions_t *a,const posix_spawnattr_t *attr,char *const argv[],char *const env[]) {
     spawn_calls++;
-    assert(*a && *attr && !strcmp(path,"/Applications/Dopamine.app/Dopamine"));
+    assert(*a && *attr && (is_dopamine_app(path) || !strcmp(path,"/setuid-tool")));
     assert(!strcmp(env[0],RH_CREDENTIAL_HELPER_ENV "=1"));
     if(fail_spawn)return fail_spawn;
-    *pid=42;donor_alive=true;
     int argc=0;while(argv[argc])argc++;
-    if (runtime_server) assert(!env[3]);
-    else assert(env[3] && !strcmp(env[3],RH_CREDENTIAL_MAIN_ONLY_ENV "=1"));
+    // An installed session may reject the forced dyld patch before the donor
+    // starts. Dopamine has a signed main entry that handles this request first.
+    bool main_entry=env[3] && !strcmp(env[3],RH_CREDENTIAL_MAIN_ONLY_ENV "=1");
+    if (runtime_server && is_dopamine_app(path) && !main_entry) return EIO;
+    assert(main_entry == (!runtime_server || is_dopamine_app(path)));
+    *pid=42;donor_alive=true;
     int r=rh_credential_parse(argc,argv,&donor_request);assert(!r);
     return 0; // START_SUSPENDED: no identity syscalls before parent preparation.
 }
@@ -379,6 +392,7 @@ static void reset(void) {
     memset(kmem,0,sizeof(kmem));memset(descriptors,0,sizeof(descriptors));
     fd_next=0;fd_count=0;fail_spawn=fail_persona=fail_resume=ready_mode=ready_cursor=0;
     persona_calls=spawn_calls=0;launchd_missing=runtime_server=false;
+    runtime_log_count=0;runtime_log[0]=0;
     fail_map_at=fail_map_extra=map_calls=fail_write_at=writes=published_error=bad_saved=0;
     helper_failure=helper_op=privilege_dropped=syscall_count=helper_groups_order=0;
     milliseconds=0;donor_alive=donor_syscalls_ready=false;exit_code=-1;
@@ -647,7 +661,7 @@ static void test_runtime_callers(void) {
     assert(!dopamine_get_root(&token));
     expected = mobile; expected.uid = expected.gid = expected.groups[0] = 0;
     assert(!proc_credential_read(target, &actual) && rh_credential_equal(&actual, &expected));
-    assert(!persona_calls && spawn_calls == 1); assert_immutable();
+    assert(!persona_calls && spawn_calls == 1 && !runtime_log_count); assert_immutable();
 
     reset(); runtime_server = true;
     store_identity(old_cred, &root);
@@ -661,6 +675,13 @@ static void test_runtime_callers(void) {
     assert(dopamine_drop_root(&token) == EPERM); assert_rolled_back();
     reset(); runtime_server = true; fail_spawn = ENOENT;
     assert(dopamine_get_root(&token) == ENOENT); assert_rolled_back();
+    assert(runtime_log_count==1 && strstr(runtime_log,"phase=spawn entry=app_main") && strstr(runtime_log,"result=2"));
+    reset(); runtime_server = true; ready_mode=1;
+    assert(dopamine_get_root(&token)==ETIMEDOUT);assert_rolled_back();
+    assert(runtime_log_count==1 && strstr(runtime_log,"phase=helper_ready entry=app_main"));
+    reset(); runtime_server = true; put32(old_cred+OFF_ucred_groups-4,0);
+    assert(proc_credential_set(target,"/Applications/Dopamine.app/Dopamine",&root)==EINVAL && !spawn_calls);
+    assert(runtime_log_count==1 && strstr(runtime_log,"phase=read_target entry=app_main"));
 
     reset(); runtime_server = true;
     struct caller_stat sb = {S_ISUID | S_ISGID, 0, 0};
@@ -672,6 +693,10 @@ static void test_runtime_callers(void) {
     expected = mobile; expected.svuid = expected.svgid = 0;
     assert(!proc_credential_read(target, &actual) && rh_credential_equal(&actual, &expected));
     assert_immutable();
+    reset(); runtime_server = true;
+    assert(!proc_credential_set(target, "/setuid-tool", &root));
+    assert_immutable();
+    puts("PASS: runtime App main-entry donor survives unavailable dyld patch; other executables retain early dyld entry");
     puts("PASS: production get/drop root, setuid/setgid and App check-in preserve hashed keys, real/saved IDs and supplementary groups");
 }
 '''
@@ -744,6 +769,14 @@ def main():
                                   '-I', str(tmp), '-I', str(SOURCE), str(harness), '-o', str(binary)], check=True)
         test_env = {**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0', 'UBSAN_OPTIONS': 'halt_on_error=1'}
         subprocess.run([str(binary)], check=True, timeout=15, env=test_env)
+        old_entry = source.replace('proc == proc_self() || is_dopamine_app(executable)', 'proc == proc_self()')
+        assert old_entry != source
+        harness.write_text(PREFIX + old_entry + runtime_callers() + SUFFIX + CALLER_CASES, encoding='utf-8')
+        subprocess.run(compiler + sanitizers + ['-std=gnu11', '-fblocks', '-Wall', '-Wextra', '-Werror',
+                                  '-Wno-unused-function', '-I', str(tmp), '-I', str(SOURCE), str(harness), '-o', str(binary)], check=True)
+        old_entry_result = subprocess.run([str(binary)], capture_output=True, timeout=15, env=test_env)
+        assert old_entry_result.returncode != 0, 'runtime App still depends on forced dyld patch'
+        print('PASS: former bootstrap-only main-entry policy fails runtime App credential regression')
         # The same real callers must reject the former in-place mutation. This
         # guards against a test that passes while the new path is bypassed.
         mutated = runtime_callers().replace('if (1)', 'if (0)')

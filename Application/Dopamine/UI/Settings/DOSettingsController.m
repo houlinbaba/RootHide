@@ -22,6 +22,7 @@
 #import "../DOSupporterLicense.h"
 #import "DORuntimeSettingsSnapshot.h"
 #import "../DORootHideDiagnostics.h"
+#import "../DOSectionGlassBackground.h"
 #import <libjailbreak/jbclient_xpc.h>
 #include <math.h>
 
@@ -135,7 +136,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
         kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
         kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
     self.sectionGlassView = glass;
-    [tableView insertSubview:glass atIndex:0];
+    [glass reloadMaterial];
 
     UIScreenEdgePanGestureRecognizer *edgeGesture =
         [[UIScreenEdgePanGestureRecognizer alloc] initWithTarget:self action:@selector(edgeBackGesture:)];
@@ -162,6 +163,11 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     [self refreshGlassAppearance];
 }
 
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView
+{
+    [self refreshGlassAppearance];
+}
+
 - (void)dealloc
 {
     [[NSNotificationCenter defaultCenter] removeObserver:self
@@ -178,6 +184,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
         });
         return;
     }
+    [self.sectionGlassView reloadMaterial];
     [self refreshGlassAppearance];
 }
 
@@ -219,9 +226,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     }
 
     self.sectionGlassView.hidden = NO;
-    self.sectionGlassView.frame = CGRectInset(sectionRect, 1.0, 0.5);
-    [self.sectionGlassView reloadMaterial];
-    [self.tableView sendSubviewToBack:self.sectionGlassView];
+    DOPlaceSectionGlass(self.tableView, self.sectionGlassView, sectionRect);
 }
 
 - (void)refreshHealth
@@ -594,12 +599,10 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
                 kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
             [glass reloadMaterial];
             self.customGlassSectionBackdropViews[key] = glass;
-            [tableView insertSubview:glass atIndex:0];
         }
 
         glass.hidden = NO;
-        CGRect frame = CGRectInset(sectionRect, 1.0, 0.5);
-        if (!CGRectEqualToRect(glass.frame, frame)) glass.frame = frame;
+        DOPlaceSectionGlass(tableView, glass, sectionRect);
     }
 
     [self.customGlassSectionBackdropViews enumerateKeysAndObjectsUsingBlock:^(NSNumber *key, DOCustomLiquidGlassView *glass, BOOL *stop) {
@@ -753,6 +756,15 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     [super viewDidLayoutSubviews];
     [self customGlassRefreshSectionBackdrops];
     [self customGlassCleanupTableHairlines];
+}
+
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView
+{
+    // Preserve Preferences' optional scroll handling when present. The managed
+    // background is viewport-fixed, so update section coordinates on scrolling.
+    if (class_getInstanceMethod([DOSettingsController superclass], _cmd))
+        [super scrollViewDidScroll:scrollView];
+    [self customGlassRefreshSectionBackdrops];
 }
 
 - (void)viewDidLoad

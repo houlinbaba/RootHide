@@ -2140,9 +2140,7 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
             [[DOUIManager sharedInstance] shareRootHideStageLogFromView:self.view];
         }],
         [UIAction actionWithTitle:DOLocalizedString(@"Menu_Restart_SpringBoard_Title") image:[UIImage systemImageNamed:@"arrow.clockwise" withConfiguration:[DOGlobalAppearance smallIconImageConfiguration]] identifier:@"respring" handler:^(__kindof UIAction * _Nonnull action) {
-            [self fadeToBlack:^{
-                [[DOEnvironmentManager sharedManager] respring];
-            }];
+            [[DOEnvironmentManager sharedManager] respring];
         }],
         [UIAction actionWithTitle:DOLocalizedString(@"Menu_Reboot_Userspace_Title") image:[UIImage systemImageNamed:@"arrow.clockwise.circle" withConfiguration:[DOGlobalAppearance smallIconImageConfiguration]] identifier:@"reboot-userspace" handler:^(__kindof UIAction * _Nonnull action) {
             [[DOEnvironmentManager sharedManager] rebootUserspace];
@@ -3031,9 +3029,7 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
     BOOL isSupported = [[DOEnvironmentManager sharedManager] isSupported];
 
     UIAction *respringAction = [UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
-        [self fadeToBlack:^{
-            [[DOEnvironmentManager sharedManager] respring];
-        }];
+        [[DOEnvironmentManager sharedManager] respring];
     }];
     UIAction *userspaceAction = [UIAction actionWithHandler:^(__kindof UIAction * _Nonnull action) {
         [[DOEnvironmentManager sharedManager] rebootUserspace];

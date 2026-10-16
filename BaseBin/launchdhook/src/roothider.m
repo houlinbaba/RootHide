@@ -354,8 +354,8 @@ static int spawn_credential_helper(pid_t *pidp, const char *path, struct _posix_
 {
     const char *mainOnly = envbuf_getenv(envp, RH_CREDENTIAL_MAIN_ONLY_ENV);
     if (mainOnly && !strcmp(mainOnly, "1")) {
-        // Bootstrap uses the signed App's main entry, even before the newly
-        // built dyld exists. Do not route it through normal App check-in.
+        // The authenticated signed App handles the helper argument before its
+        // normal check-in, during both bootstrap and runtime credential RPCs.
         if (!is_dopamine_app(path)) return EINVAL;
         return __posix_spawn_orig_wrapper(pidp, path, desc, argv, envp);
     }

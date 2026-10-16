@@ -26,8 +26,8 @@ static long credential_helper_syscall(int number, uintptr_t a, uintptr_t b, uint
 #include <libjailbreak/credential_helper.h>
 
 int main(int argc, char * argv[]) {
-    // Bootstrap donors use the signed App and the original dyld. Finish before
-    // the environment manager, server check-in or UIKit can run.
+    // App credential donors use this signed main entry. Finish before the
+    // environment manager, server check-in or UIKit can run.
     if (rh_credential_helper_main(argc, argv)) return 0;
     if (argc >= 3) {
         if (!strcmp(argv[1], "trollstore")) {

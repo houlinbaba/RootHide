@@ -6,6 +6,8 @@
 //
 
 #import "DOCreditsViewController.h"
+#import <objc/runtime.h>
+#import "../DOSectionGlassBackground.h"
 #import "DOLicenseViewController.h"
 #import "DOUIManager.h"
 #import "DOEnvironmentManager.h"
@@ -220,22 +222,22 @@ static NSInteger const DOCustomGlassCreditsSeparatorTag = 0xC652;
                                                              baseTintAlpha:(isTallSection ? 0.044 : 0.038)];
             glass.userInteractionEnabled = NO;
             glass.materialScale = isTallSection ? 0.94 : 0.88;
+            [glass reloadMaterial];
             self.customGlassSectionBackdropViews[key] = glass;
-            [tableView insertSubview:glass atIndex:0];
         }
 
         BOOL isTallSection = CGRectGetHeight(sectionRect) > 220.0;
         CGFloat radius = isTallSection ? 24.0 : 18.0;
         glass.hidden = NO;
-        glass.frame = CGRectInset(sectionRect, 1.0, 0.5);
+        DOPlaceSectionGlass(tableView, glass, sectionRect);
+        BOOL materialChanged = glass.preferredCornerRadius != radius;
         glass.preferredCornerRadius = radius;
         glass.layer.cornerRadius = radius;
         glass.layer.maskedCorners =
             kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
             kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
         glass.materialScale = isTallSection ? 0.94 : 0.88;
-        [glass reloadMaterial];
-        [tableView sendSubviewToBack:glass];
+        if (materialChanged) [glass reloadMaterial];
     }
 
     [self.customGlassSectionBackdropViews enumerateKeysAndObjectsUsingBlock:^(NSNumber *key, DOCustomLiquidGlassView *glass, BOOL *stop) {
@@ -250,7 +252,6 @@ static NSInteger const DOCustomGlassCreditsSeparatorTag = 0xC652;
     [self customGlassRefreshSectionBackdrops];
     for (UITableViewCell *cell in tableView.visibleCells)
         [self customGlassStyleVisibleCell:cell atIndexPath:[tableView indexPathForCell:cell]];
-    [self customGlassRefreshSectionBackdrops];
 }
 
 - (void)customGlassRefreshPageAppearance
@@ -260,6 +261,9 @@ static NSInteger const DOCustomGlassCreditsSeparatorTag = 0xC652;
     [tableView setNeedsLayout];
     [tableView layoutIfNeeded];
     [self customGlassRefreshSectionBackdrops];
+
+    for (DOCustomLiquidGlassView *glass in self.customGlassSectionBackdropViews.allValues)
+        [glass reloadMaterial];
 
     UIView *backButton = [self.view viewWithTag:0xC654];
     if ([backButton isKindOfClass:[UIButton class]]) {
@@ -377,6 +381,13 @@ static NSInteger const DOCustomGlassCreditsSeparatorTag = 0xC652;
     [super viewDidLayoutSubviews];
     [self customGlassRefreshSectionBackdrops];
     [self customGlassCleanupTableHairlines];
+}
+
+- (void)scrollViewDidScroll:(UIScrollView *)scrollView
+{
+    if (class_getInstanceMethod([DOCreditsViewController superclass], _cmd))
+        [super scrollViewDidScroll:scrollView];
+    [self customGlassRefreshSectionBackdrops];
 }
 
 - (void)viewDidLoad

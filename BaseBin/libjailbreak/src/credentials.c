@@ -322,6 +322,9 @@ int proc_credential_set(uint64_t proc, const char *executable, const struct rh_c
     if (!gSystemInfo.kernelStruct.proc_ro.exists || !gSystemInfo.kernelStruct.ucred_rw.exists) return ENOTSUP;
     pthread_mutex_lock(&credentialLock);
     struct rh_credential current;
+    const char *phase = "read_target";
+    pid_t pid = 0;
+    bool mainEntry = proc == proc_self() || is_dopamine_app(executable);
     int r = proc_credential_read(proc, &current);
     if (r || rh_credential_equal(&current, identity)) goto unlock;
 
@@ -329,9 +332,8 @@ int proc_credential_set(uint64_t proc, const char *executable, const struct rh_c
     posix_spawnattr_t attr;
     posix_spawn_file_actions_t actions;
     bool attrReady = false, actionsReady = false;
-    pid_t pid = 0;
     int donorVersion = 0;
-    const char *phase = "pipe_ready";
+    phase = "pipe_ready";
     r = credential_pipe(ready);
     if (r) goto done;
     phase = "pipe_release";
@@ -374,11 +376,12 @@ int proc_credential_set(uint64_t proc, const char *executable, const struct rh_c
         snprintf(numbers[i], sizeof(numbers[i]), "%u", i < 7 ? fields[i] : identity->groups[i - 7]);
         argv[2 + i] = numbers[i];
     }
-    // Bootstrap privilege/cleanup runs in the application itself. Always use
-    // its main entry: launchd may have been injected before the new dyld exists,
-    // or the on-disk dyld may still belong to the previous installed version.
+    // Dopamine handles this argument before App initialization/check-in in main.
+    // Use that entry for runtime App credentials too: forcing a dyld patch here
+    // adds an unnecessary dependency on the installed session's dyld image.
+    // Other executables still need the early dyld entry to avoid running them.
     char *env[] = {RH_CREDENTIAL_HELPER_ENV "=1", "_SafeMode=1", "DYLD_IN_CACHE=0",
-                   proc == proc_self() ? RH_CREDENTIAL_MAIN_ONLY_ENV "=1" : NULL, NULL};
+                   mainEntry ? RH_CREDENTIAL_MAIN_ONLY_ENV "=1" : NULL, NULL};
     phase = "spawn";
     r = posix_spawn(&pid, executable, &actions, &attr, argv, env);
     if (r) goto done;
@@ -422,6 +425,14 @@ done:
     credential_reap(pid, donorVersion);
     roothide_stage_log("credential.set.end phase=%s proc=%llx uid=%u gid=%u helper_pid=%d result=%d", phase, proc, identity->uid, identity->gid, pid, r);
 unlock:
+    // launchd's activation trace is closed during normal App RPCs. Preserve
+    // the failing donor phase without enabling general server tracing or
+    // exporting credential pointers, sandbox grants or executable arguments.
+    if (r && proc != proc_self()) {
+        roothide_stage_file_log(ROOTHIDE_BOOTSTRAP_STAGE_LOG_PATH,
+            "credential.runtime.failed phase=%s entry=%s helper_pid=%d result=%d",
+            phase, mainEntry ? "app_main" : "early_dyld", pid, r);
+    }
     pthread_mutex_unlock(&credentialLock);
     return r;
 }

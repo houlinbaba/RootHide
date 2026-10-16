@@ -152,6 +152,7 @@ __attribute__((objc_root_class)) @interface NSObject @end
 @interface NSString : NSObject
 @property(readonly) const char *fileSystemRepresentation;
 + (instancetype)stringWithFormat:(NSString *)format,...;
+- (BOOL)isEqualToString:(NSString *)other;
 @end
 @interface NSArray : NSObject
 + (instancetype)arrayWithObjects:(const id *)objects count:(NSUInteger)count;
@@ -161,6 +162,7 @@ __attribute__((objc_root_class)) @interface NSObject @end
 @end
 @interface NSError : NSObject
 @property(readonly) NSString *description;
+@property(readonly) NSString *localizedDescription;
 + (instancetype)errorWithDomain:(NSString *)domain code:(long)code userInfo:(NSDictionary *)info;
 @end
 @interface NSString (UTF8)
@@ -204,6 +206,8 @@ INTERFACE = r'''
 - (int)prepareBootstrapUserspaceReboot;
 - (void)cancelPreparedUserspaceReboot;
 - (void)rebootUserspace;
+- (void)respring;
+- (void)performRestartAction:(NSString *)command;
 - (int)spawnJbctlAsRootWithArgs:(NSArray *)args;
 @end
 @interface DOJailbreaker : NSObject { BOOL _bootstrapIdentityActive; }
@@ -292,7 +296,9 @@ def check_wiring(app, env):
     cleanup = function(app, '- (NSError *)cleanUpPostExploitation')
     assert cleanup.index('cancelPreparedUserspaceReboot') < cleanup.index('exit(EXIT_FAILURE)')
     assert stages.index('cancelPreparedUserspaceReboot') < stages.index('doExploitation')
-    reboot = function(env, '- (void)rebootUserspace')
+    assert '[self performRestartAction:@"reboot_userspace"]' in function(env, '- (void)rebootUserspace')
+    assert '[self performRestartAction:@"respring"]' in function(env, '- (void)respring')
+    reboot = function(env, '- (void)performRestartAction:')
     assert 'prepared.pid > 0 ? rh_userspace_reboot_finish(&prepared)' in reboot
     prepare = function(env, '- (int)prepareBootstrapUserspaceReboot')
     assert 'runAsRoot' not in prepare and 'runUnsandboxed' not in prepare
@@ -345,7 +351,7 @@ def main():
             print('PASS: the same bootstrap model compiles with Darwin sys/wait.h and -Werror')
         header = (SRC / 'userspace_reboot.h').read_text(encoding='utf-8')
         header = '\n'.join(line for line in header.splitlines() if not line.startswith('#include'))
-        methods = '\n'.join(function(env, sig) for sig in ('- (void)rebootUserspace', '- (int)prepareBootstrapUserspaceReboot', '- (void)cancelPreparedUserspaceReboot'))
+        methods = '\n'.join(function(env, sig) for sig in ('- (void)respring', '- (void)rebootUserspace', '- (void)performRestartAction:', '- (int)prepareBootstrapUserspaceReboot', '- (void)cancelPreparedUserspaceReboot'))
         probe = tmp / 'bootstrap-reboot-arc.m'
         probe.write_text(OBJC + header + INTERFACE + '@implementation DOEnvironmentManager\n' + methods + '\n@end\n'
                          + '@implementation DOJailbreaker\n- (void)checkCompletion:(NSError **)errOut {\n' + completion(app)
