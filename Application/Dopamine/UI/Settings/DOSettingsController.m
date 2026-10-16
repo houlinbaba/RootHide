@@ -22,7 +22,6 @@
 #import "../DOSupporterLicense.h"
 #import "DORuntimeSettingsSnapshot.h"
 #import "../DORootHideDiagnostics.h"
-#import "../DOSectionGlassBackground.h"
 #import <libjailbreak/jbclient_xpc.h>
 #include <math.h>
 
@@ -136,7 +135,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
         kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
         kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
     self.sectionGlassView = glass;
-    [glass reloadMaterial];
+    [tableView insertSubview:glass atIndex:0];
 
     UIScreenEdgePanGestureRecognizer *edgeGesture =
         [[UIScreenEdgePanGestureRecognizer alloc] initWithTarget:self action:@selector(edgeBackGesture:)];
@@ -163,11 +162,6 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     [self refreshGlassAppearance];
 }
 
-- (void)scrollViewDidScroll:(UIScrollView *)scrollView
-{
-    [self refreshGlassAppearance];
-}
-
 - (void)dealloc
 {
     [[NSNotificationCenter defaultCenter] removeObserver:self
@@ -184,7 +178,6 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
         });
         return;
     }
-    [self.sectionGlassView reloadMaterial];
     [self refreshGlassAppearance];
 }
 
@@ -226,7 +219,9 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     }
 
     self.sectionGlassView.hidden = NO;
-    DOPlaceSectionGlass(self.tableView, self.sectionGlassView, sectionRect);
+    self.sectionGlassView.frame = CGRectInset(sectionRect, 1.0, 0.5);
+    [self.sectionGlassView reloadMaterial];
+    [self.tableView sendSubviewToBack:self.sectionGlassView];
 }
 
 - (void)refreshHealth
@@ -594,15 +589,19 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
             glass = [[DOCustomLiquidGlassView alloc] initWithCornerRadius:18.0 baseTintAlpha:0.038];
             glass.userInteractionEnabled = NO;
             glass.materialScale = 0.88;
-            glass.layer.maskedCorners =
-                kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
-                kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
-            [glass reloadMaterial];
             self.customGlassSectionBackdropViews[key] = glass;
+            [tableView insertSubview:glass atIndex:0];
         }
 
         glass.hidden = NO;
-        DOPlaceSectionGlass(tableView, glass, sectionRect);
+        glass.frame = CGRectInset(sectionRect, 1.0, 0.5);
+        glass.preferredCornerRadius = 18.0;
+        glass.layer.cornerRadius = 18.0;
+        glass.layer.maskedCorners =
+            kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
+            kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+        [glass reloadMaterial];
+        [tableView sendSubviewToBack:glass];
     }
 
     [self.customGlassSectionBackdropViews enumerateKeysAndObjectsUsingBlock:^(NSNumber *key, DOCustomLiquidGlassView *glass, BOOL *stop) {
@@ -621,6 +620,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     [self customGlassRefreshSectionBackdrops];
     for (UITableViewCell *cell in tableView.visibleCells)
         [self customGlassStyleVisibleCell:cell atIndexPath:[tableView indexPathForCell:cell]];
+    [self customGlassRefreshSectionBackdrops];
 }
 
 - (void)customGlassRefreshPageAppearance
@@ -632,10 +632,6 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     [tableView setNeedsLayout];
     [tableView layoutIfNeeded];
     [self customGlassRefreshSectionBackdrops];
-
-    // Theme/appearance changes refresh filters. Scrolling updates geometry.
-    for (DOCustomLiquidGlassView *glass in self.customGlassSectionBackdropViews.allValues)
-        [glass reloadMaterial];
 
     UIView *backButton = [self.view viewWithTag:0xC653];
     if (backButton)
@@ -756,15 +752,6 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     [super viewDidLayoutSubviews];
     [self customGlassRefreshSectionBackdrops];
     [self customGlassCleanupTableHairlines];
-}
-
-- (void)scrollViewDidScroll:(UIScrollView *)scrollView
-{
-    // Preserve Preferences' optional scroll handling when present. The managed
-    // background is viewport-fixed, so update section coordinates on scrolling.
-    if (class_getInstanceMethod([DOSettingsController superclass], _cmd))
-        [super scrollViewDidScroll:scrollView];
-    [self customGlassRefreshSectionBackdrops];
 }
 
 - (void)viewDidLoad
