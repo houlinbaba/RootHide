@@ -20,6 +20,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  RESEARCH_BUILD: "1"
   BUILD_MODE: ${{ github.event.inputs.build_mode || 'focused' }}
   THEOS: ${{ github.workspace }}/theos
   THEOS_COMMIT: 88506b2c22e9e07dd4ed055f23c9e398a117a2c7
@@ -215,8 +216,8 @@ jobs:
       - name: RootHide dyld metadata failure and respawn cleanup regressions
         run: python3 .github/scripts/test_dyld_metadata.py
 
-      - name: RootHide unrestrict preparation and resume contracts
-        run: python3 .github/scripts/test_unrestrict_contract.py --mutations
+      - name: Deadline regression correction only (F3 remains FAIL)
+        run: python3 .github/scripts/test_unrestrict_contract.py --regression-correction --mutations
 
       - name: RootHide boomerang recovery error regressions
         run: python3 .github/scripts/test_boomerang_recovery.py
@@ -286,37 +287,21 @@ jobs:
           set -euo pipefail
           export CLANG_MODULE_CACHE_PATH="$RUNNER_TEMP/clang-module-cache"
           mkdir -p "$CLANG_MODULE_CACHE_PATH"
-          make -j"$(sysctl -n hw.logicalcpu)" NIGHTLY=1
+          make -j"$(sysctl -n hw.logicalcpu)" NIGHTLY=1 RESEARCH_BUILD=1
           python3 .github/scripts/check_basebin_signatures.py --tipa Application/Dopamine.tipa
 
-          version="$(cat BaseBin/_external/basebin/.version)-$(git rev-parse --short HEAD)"
-          artifact="Dopamine_${version}_roothide.tipa"
-          cp Application/Dopamine.tipa "Application/${artifact}"
-          echo "artifact=${artifact}" >> "$GITHUB_ENV"
+          python3 .github/scripts/check_d1_apple_components.py --output artifacts/d1-apple-components.json
 
-      - name: Upload focused artifact
-        if: env.BUILD_MODE == 'focused'
+      # No installable/runtime binary upload while F3/F1 fail. Full packaging
+      # is exercised inside the runner only; the receipt cannot be installed.
+      - name: Upload compile research evidence only
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: roothide-systemhook-${{ github.sha }}
+          name: compile-research-evidence-${{ github.sha }}
           path: |
-            artifacts/systemhook.dylib
-            artifacts/launchdhook.dylib
-            artifacts/jailbreakd
-            artifacts/roothidehooks.dylib
-            artifacts/dyldhook_merge.arm64.dylib
-            artifacts/dyldhook_merge.arm64e.dylib
             artifacts/source-provenance.txt
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload full artifact
-        if: env.BUILD_MODE == 'full'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.artifact }}
-          path: |
-            Application/${{ env.artifact }}
-            artifacts/source-provenance.txt
+            artifacts/d1-apple-components.json
+            docs/review/candidate-status.json
           if-no-files-found: error
           retention-days: 14

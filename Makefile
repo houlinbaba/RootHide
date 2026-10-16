@@ -11,6 +11,7 @@ export BUILD_STANDALONE = 1
 endif
 
 all:
+	@python3 .github/scripts/check_candidate_policy.py $(if $(filter 1,$(RESEARCH_BUILD)),--research,--require-distributable)
 	@$(MAKE) -C BaseBin
 	@$(MAKE) -C Packages
 	@$(MAKE) -C Application

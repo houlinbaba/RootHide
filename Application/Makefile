@@ -6,6 +6,7 @@ DOPAMINE_VERSION ?= 3.0.7
 all: Dopamine.ipa
 
 Dopamine.ipa: build/Build/Products/Debug-iphoneos/Dopamine.app
+	python3 ../.github/scripts/check_candidate_policy.py $(if $(filter 1,$(RESEARCH_BUILD)),--research,--require-distributable)
 	python3 ../.github/scripts/check_package_managers.py --app build/Build/Products/Debug-iphoneos/Dopamine.app
 	@echo Ad-Hoc signing Dopamine
 	xattr -rc build/Build/Products/Debug-iphoneos/Dopamine.app

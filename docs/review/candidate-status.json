@@ -1,0 +1,7 @@
+{
+  "classification": "compile-research",
+  "distributable": false,
+  "F3": "FAIL",
+  "F1": "FAIL",
+  "reason": "Preparation deadline regression corrected; post-DONE failure ownership, bounded preparation and unknown spawn outcomes remain unresolved. No device acceptance."
+}
