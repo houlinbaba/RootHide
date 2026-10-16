@@ -51,10 +51,22 @@ def main():
         report['app'] = {k: app_info.get(k) for k in ['CFBundleIdentifier','CFBundleShortVersionString','CFBundleVersion']}
         report['app']['uuid'] = command('dwarfdump', '--uuid', str(app / 'Dopamine'))
         report['app']['libraries'] = command('otool', '-L', str(app / 'Dopamine'))
-        assert '@executable_path/libjailbreak.dylib' in report['app']['libraries']
+        # For the main executable both loader_path and executable_path resolve
+        # to the App directory. Check the resolved bundled dependency instead
+        # of assuming a particular spelling used by a helper target's script.
+        linked = re.findall(r'^\s+(\S+) \(compatibility',report['app']['libraries'],re.M)
+        jailbreak_links = [name for name in linked if name.endswith('/libjailbreak.dylib')]
+        assert len(jailbreak_links) == 1, jailbreak_links
+        install_name = jailbreak_links[0]
+        resolved = None
+        for prefix in ['@loader_path/','@executable_path/']:
+            if install_name.startswith(prefix):
+                resolved = ((app / 'Dopamine').parent / install_name[len(prefix):]).resolve()
+        assert resolved == (app / 'libjailbreak.dylib').resolve(), install_name
+        report['app']['resolved_libjailbreak'] = str(resolved)
         embedded = command('dwarfdump', '--uuid', str(app / 'libjailbreak.dylib'))
         uuids = lambda value: re.findall(r'UUID: ([0-9A-F-]+) \(([^)]+)\)',value)
-        assert uuids(embedded) == uuids(report['components']['libjailbreak.dylib']['uuid'])
+        assert uuids(embedded) and uuids(embedded) == uuids(report['components']['libjailbreak.dylib']['uuid'])
         assert b'privilege.first_failure operation=' in (app / 'libjailbreak.dylib').read_bytes()
         with zipfile.ZipFile(ROOT / 'Application/Dopamine.tipa') as package:
             basebin = package.read('Payload/Dopamine.app/basebin.tar')
