@@ -8,6 +8,18 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / 'BaseBin/libjailbreak/src'
 
+
+def method(source, signature):
+    start = source.index(signature)
+    opening = source.index('{', start)
+    depth = 0
+    for pos in range(opening, len(source)):
+        depth += (source[pos] == '{') - (source[pos] == '}')
+        if not depth:
+            return source[start:pos + 1]
+    raise ValueError(signature)
+
+
 HARNESS = r'''
 #include "roothide_stage.h"
 #include <assert.h>
@@ -128,11 +140,15 @@ def main():
     ui = (ROOT / 'Application/Dopamine/UI/Settings/DOSettingsController.m').read_text(encoding='utf-8')
     assert 'shareRootHideStageLogPressed' in ui
     environment = (ROOT / 'Application/Dopamine/Jailbreak/DOEnvironmentManager.m').read_text(encoding='utf-8')
-    reboot = environment.split('- (void)rebootUserspace', 1)[1].split('- (void)refreshJailbreakApps', 1)[0]
+    assert '[self performRestartAction:@"reboot_userspace"]' in method(environment, '- (void)rebootUserspace')
+    assert '[self performRestartAction:@"respring"]' in method(environment, '- (void)respring')
+    reboot = method(environment, '- (void)performRestartAction:')
     assert 'dispatch_get_global_queue' in reboot and 'if (requestInFlight) return' in reboot
-    assert 'Userspace_Reboot_Failed_Format' in reboot and 'userspace_reboot.return result=%d' in reboot
-    assert 'spawnJbctlAsRootWithArgs:@[@"reboot_userspace"]' in reboot
-    helper = environment.split('- (int)spawnJbctlAsRootWithArgs:', 1)[1].split('- (int)runTrollStoreAction:', 1)[0]
+    assert 'Userspace_Reboot_Failed_Format' in reboot
+    assert 'restart.request command=%s log_open_result=%d' in reboot
+    assert 'restart.return command=%s result=%d' in reboot
+    assert 'spawnJbctlAsRootWithArgs:@[command]' in reboot
+    helper = method(environment, '- (int)spawnJbctlAsRootWithArgs:')
     assert '[self runAsRoot:^' in helper
     assert '"--waitfor"' in helper
     assert 'jbclient_dopamine_get_root()' in environment
