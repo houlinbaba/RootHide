@@ -215,6 +215,9 @@ jobs:
       - name: RootHide dyld metadata failure and respawn cleanup regressions
         run: python3 .github/scripts/test_dyld_metadata.py
 
+      - name: RootHide unrestrict preparation and resume contracts
+        run: python3 .github/scripts/test_unrestrict_contract.py --mutations
+
       - name: RootHide boomerang recovery error regressions
         run: python3 .github/scripts/test_boomerang_recovery.py
 

@@ -49,6 +49,10 @@ void ensure_jbroot_symlink(const char* filepath);
 int roothide_patch_proc_ex(pid_t pid, bool forceDyldPatch);
 int roothide_patch_proc(pid_t pid);
 
+// Preparation waits at most 10 monotonic seconds; timeout starts no callback.
+// The callback is synchronous and is not cancelled on a timer. On any error,
+// the caller retains responsibility for the target; this function never kills.
+// With resume=false, successful return also leaves final disposition to caller.
 int unrestrict(pid_t pid, int (*callback)(pid_t), bool resume);
 
 int unsandbox(const char* dir, const char* file);

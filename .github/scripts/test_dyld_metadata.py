@@ -25,6 +25,7 @@ PREFIX = r'''
 #include <stdarg.h>
 #include <errno.h>
 #include <pthread.h>
+#include <time.h>
 #include <sys/types.h>
 #define DYLD_INFO_MAX_SEARCH_INDEX 200
 #define KERN_SUCCESS 0
@@ -85,6 +86,10 @@ static int kwrite64(uint64_t a,uint64_t v) { return kwritebuf(a,&v,sizeof(v)); }
 '''
 
 PARENT_PREFIX = r'''
+static int mock_unrestrict_clock(int clock,struct timespec *ts) {
+    assert(clock==CLOCK_MONOTONIC);ts->tv_sec=0;ts->tv_nsec=0;return 0;
+}
+#define clock_gettime mock_unrestrict_clock
 static int proc_paused(pid_t pid,bool *paused) { assert(pid==520);*paused=true;return 0; }
 static int usleep(unsigned usecs) { assert(usecs==100000);return 0; }
 static int kill(pid_t pid,int sig) {
