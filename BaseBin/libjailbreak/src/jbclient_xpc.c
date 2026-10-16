@@ -193,11 +193,13 @@ int jbclient_process_checkin(char **rootPathOut, char **bootUUIDOut, char **sand
 	if (xreply) {
 		xpc_object_t resultObject = xpc_dictionary_get_value(xreply, "result");
 		if (!resultObject || xpc_get_type(resultObject) != XPC_TYPE_INT64) {
+			roothide_stage_log("app.checkin.rpc phase=reply_type domain=protocol result=%d", EPROTO);
 			xpc_release(xreply);
 			return EPROTO;
 		}
 		int64_t result = xpc_dictionary_get_int64(xreply, "result");
 		if (result != 0) {
+			roothide_stage_log("app.checkin.rpc phase=server_reply domain=server_status raw=%lld result=%d", (long long)result, (int)result);
 			xpc_release(xreply);
 			return (int)result;
 		}
@@ -212,6 +214,7 @@ int jbclient_process_checkin(char **rootPathOut, char **bootUUIDOut, char **sand
 		xpc_release(xreply);
 		return result;
 	}
+	roothide_stage_log("app.checkin.rpc phase=no_reply domain=transport_no_reply result=-1");
 	return -1;
 }
 

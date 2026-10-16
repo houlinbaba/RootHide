@@ -144,6 +144,7 @@ static long fake_syscall(int, uintptr_t, uintptr_t, uintptr_t);
 #define RH_CREDENTIAL_SYSCALL(n,a,b,c) fake_syscall(n,(uintptr_t)(a),(uintptr_t)(b),(uintptr_t)(c))
 #include "credential_helper.h"
 #include "credential_refs.h"
+#include "credential_diagnostics.h"
 // System libc headers may already declare these types and functions on macOS.
 // Give the deterministic model its own namespace after including libc headers.
 #define pid_t rh_test_pid_t
@@ -278,8 +279,14 @@ static void roothide_stage_log(const char *f,...) { (void)f; }
 #define ROOTHIDE_BOOTSTRAP_STAGE_LOG_PATH "/test/bootstrap.log"
 static unsigned runtime_log_count;
 static char runtime_log[512];
+static unsigned failure_log_count;
+static char failure_log[1024];
 static void roothide_stage_file_log(const char *path,const char *format,...) {
     assert(!strcmp(path,ROOTHIDE_BOOTSTRAP_STAGE_LOG_PATH));
+    if(strstr(format,"privilege.first_failure")) {
+        va_list args;va_start(args,format);vsnprintf(failure_log,sizeof(failure_log),format,args);va_end(args);
+        failure_log_count++;return;
+    }
     va_list args;va_start(args,format);vsnprintf(runtime_log,sizeof(runtime_log),format,args);va_end(args);
     runtime_log_count++;
 }
@@ -393,6 +400,7 @@ static void reset(void) {
     fd_next=0;fd_count=0;fail_spawn=fail_persona=fail_resume=ready_mode=ready_cursor=0;
     persona_calls=spawn_calls=0;launchd_missing=runtime_server=false;
     runtime_log_count=0;runtime_log[0]=0;
+    failure_log_count=0;failure_log[0]=0;
     fail_map_at=fail_map_extra=map_calls=fail_write_at=writes=published_error=bad_saved=0;
     helper_failure=helper_op=privilege_dropped=syscall_count=helper_groups_order=0;
     milliseconds=0;donor_alive=donor_syscalls_ready=false;exit_code=-1;
@@ -708,8 +716,8 @@ def runtime_callers():
     system = (ROOT / 'BaseBin/launchdhook/src/jbserver/jbdomain_systemwide.c').read_text(encoding='utf-8')
     setid = function(system[system.index('// Fix setuid'):], 'if (__builtin_available(iOS 17.0, *))')
     saved = function(system[system.index('// For the Dopamine app itself'):], 'if (__builtin_available(iOS 17.0, *))')
-    functions += '\nstatic int apply_setid(uint64_t proc, const char *procPath, struct caller_stat sb) {\n' + setid + '\nreturn 0;\n}\n'
-    functions += '\nstatic int apply_saved_ids(uint64_t proc, const char *procPath) {\n' + saved + '\nreturn 0;\n}\n'
+    functions += '\nstatic int apply_setid(uint64_t proc, const char *procPath, struct caller_stat sb) {\nstruct rh_failure_scope scope; rh_failure_begin(&scope,"checkin_server",100);\n' + setid + '\nreturn rh_failure_end(&scope,"complete","status",0,0);\n}\n'
+    functions += '\nstatic int apply_saved_ids(uint64_t proc, const char *procPath) {\nstruct rh_failure_scope scope; rh_failure_begin(&scope,"checkin_server",100);\n' + saved + '\nreturn rh_failure_end(&scope,"complete","status",0,0);\n}\n'
     return CALLER_PREFIX + functions.replace('__builtin_available(iOS 17.0, *)', '1')
 
 
@@ -756,6 +764,8 @@ def main():
     compiler = [str(args.zig), 'cc'] if args.zig else [shutil.which('clang') or 'clang']
     source = (SOURCE / 'credentials.c').read_text(encoding='utf-8')
     source = '\n'.join(line for line in source.splitlines() if not line.startswith('#include'))
+    diagnostics = (SOURCE / 'credential_diagnostics.c').read_text(encoding='utf-8')
+    source = '\n'.join(line for line in diagnostics.splitlines() if not line.startswith('#include')) + '\n' + source
     context = nullcontext(str(args.workdir.resolve())) if args.workdir else tempfile.TemporaryDirectory(prefix='roothide-credentials-', dir=args.tmpdir)
     with context as directory:
         tmp = Path(directory)

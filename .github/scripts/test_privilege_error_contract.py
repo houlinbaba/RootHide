@@ -22,6 +22,9 @@ PREFIX = r'''
 #include <errno.h>
 #include <sys/types.h>
 #include "credential_types.h"
+#include "credential_diagnostics.h"
+static void roothide_stage_file_log(const char *path,const char *format,...){(void)path;(void)format;}
+#define ROOTHIDE_BOOTSTRAP_STAGE_LOG_PATH "/fixture/private.log"
 #define PROC_PIDPATHINFO_MAXSIZE 1024
 #define __builtin_available(...) 1
 #define koffsetof(type,field) off_##field
@@ -121,7 +124,9 @@ def main():
     args = parser.parse_args()
     lib = ROOT / 'BaseBin/libjailbreak/src'
     source = (lib / 'credentials.c').read_text(encoding='utf-8')
-    functions = extract(source, 'static int credential_read(') + extract(source, 'int proc_credential_read(')
+    diag = (lib / 'credential_diagnostics.c').read_text(encoding='utf-8')
+    functions = '\n'.join(line for line in diag.splitlines() if not line.startswith('#include'))
+    functions += extract(source, 'static int credential_read_bytes(') + extract(source, 'static int credential_read(') + extract(source, 'int proc_credential_read(')
     server = extract((ROOT / 'BaseBin/launchdhook/src/jbserver/jbdomain_dopamine.c').read_text(encoding='utf-8'),
                      'int dopamine_get_root(')
     client = extract((lib / 'jbclient_xpc.c').read_text(encoding='utf-8'), 'int jbclient_dopamine_get_root(')

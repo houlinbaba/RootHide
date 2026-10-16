@@ -204,23 +204,29 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 {
 	// Fetch process info
 	pid_t pid = audit_token_to_pid(*processToken);
+	struct rh_failure_scope scope;
+	rh_failure_begin(&scope, "checkin_server", pid);
 	char procPath[4*MAXPATHLEN];
-	if (proc_pidpath(pid, procPath, sizeof(procPath)) <= 0) {
-		return -1;
+	int pathResult = proc_pidpath(pid, procPath, sizeof(procPath));
+	if (pathResult <= 0) {
+		return rh_failure_end(&scope, "target_path", "libproc_return", pathResult, -1);
 	}
 
 	// Find proc in kernelspace
 	uint64_t proc = proc_find(pid);
 	if (!proc) {
-		return -1;
+		return rh_failure_end(&scope, "find_target", "lookup_bool", 0, -1);
 	}
 
 	// Get jbroot and boot uuid
-	if (systemwide_get_jbroot(rootPathOut) != 0) return -1;
-	if (systemwide_get_boot_uuid(bootUUIDOut) != 0) {
+	int metadataResult = systemwide_get_jbroot(rootPathOut);
+	if (metadataResult != 0) return rh_failure_end(&scope, "root_metadata", "metadata_status", metadataResult, -1);
+	metadataResult = systemwide_get_boot_uuid(bootUUIDOut);
+	if (metadataResult != 0) {
+		rh_failure_note("boot_metadata", "metadata_status", metadataResult, -1);
 		free(*rootPathOut);
 		*rootPathOut = NULL;
-		return -1;
+		return rh_failure_end(&scope, "boot_metadata", "metadata_status", metadataResult, -1);
 	}
 
 /*
@@ -283,13 +289,13 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 			if (__builtin_available(iOS 17.0, *)) {
 				struct rh_credential identity;
 				int r = proc_credential_read(proc, &identity);
-				if (r) return r;
+				if (r) return rh_failure_end(&scope, "setid_pre_read", "credential_status", r, r);
 				if (sb.st_mode & S_ISUID) identity.uid = identity.svuid = sb.st_uid;
 				if (sb.st_mode & S_ISGID) {
 					identity.gid = identity.svgid = identity.groups[0] = sb.st_gid;
 				}
 				r = proc_credential_set(proc, procPath, &identity);
-				if (r) return r;
+				if (r) return rh_failure_end(&scope, "setid_install", "credential_status", r, r);
 			}
 			else {
 				uint64_t ucred = proc_ucred(proc);
@@ -348,10 +354,10 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 		if (__builtin_available(iOS 17.0, *)) {
 			struct rh_credential identity;
 			int r = proc_credential_read(proc, &identity);
-			if (r) return r;
+			if (r) return rh_failure_end(&scope, "app_pre_read", "credential_status", r, r);
 			identity.svuid = identity.svgid = 0;
 			r = proc_credential_set(proc, procPath, &identity);
-			if (r) return r;
+			if (r) return rh_failure_end(&scope, "app_install", "credential_status", r, r);
 		}
 		else {
 			uint64_t ucred = proc_ucred(proc);
@@ -414,7 +420,7 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 #endif
 
 	proc_rele(proc);
-	return 0;
+	return rh_failure_end(&scope, "complete", "credential_status", 0, 0);
 }
 
 int systemwide_fork_fix(audit_token_t *parentToken, uint64_t childPid)

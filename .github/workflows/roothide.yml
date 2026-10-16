@@ -227,6 +227,11 @@ jobs:
       - name: RootHide immutable credential lifecycle regressions
         run: python3 .github/scripts/test_roothide_credentials.py
 
+      - name: RootHide privilege first failure diagnostics
+        run: |
+          mkdir -p "$RUNNER_TEMP/roothide-first-failure"
+          python3 .github/scripts/test_privilege_first_failure.py --workdir "$RUNNER_TEMP/roothide-first-failure" --output "$RUNNER_TEMP/roothide-first-failure/results.json" --mutations
+
       - name: RootHide reboot handoff cancellation regressions
         run: python3 .github/scripts/test_reboot_handoff.py
 

@@ -2,6 +2,7 @@
 #define RH_CREDENTIALS_H
 
 #include "credential_types.h"
+#include "credential_diagnostics.h"
 
 int proc_credential_read(uint64_t proc, struct rh_credential *out);
 // Pin before bootstrap elevation. Restore consumes the snapshot on success
