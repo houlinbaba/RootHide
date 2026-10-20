@@ -560,8 +560,6 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     UITableView *tableView = [self valueForKey:@"table"];
     if (!tableView)
         return;
-    if ([self customGlassDeferRefreshWhileScrolling:tableView])
-        return;
 
     if (!self.customGlassSectionBackdropViews)
         self.customGlassSectionBackdropViews = [NSMutableDictionary dictionary];
@@ -750,7 +748,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
             if (currentIndexPath)
                 [weakSelf customGlassStyleVisibleCell:strongCell atIndexPath:currentIndexPath];
         }
-        [weakSelf customGlassScheduleIdleRefresh];
+        [weakSelf customGlassRefreshSectionBackdrops];
     });
 }
 
@@ -768,8 +766,8 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     if (self.customGlassIdleRefreshScheduled)
         return;
     self.customGlassIdleRefreshScheduled = YES;
-    // Tracking mode must not run all-section material rebuilds. Coalesce cell
-    // callbacks and also wait for deceleration before doing the RC7 refresh.
+    // Delay hairline cleanup and runtime value updates until scrolling stops.
+    // Section geometry and stacking still follow the RC7 layout/cell callbacks.
     [self performSelector:@selector(customGlassPerformIdleRefresh) withObject:nil
                afterDelay:0 inModes:@[NSDefaultRunLoopMode]];
 }

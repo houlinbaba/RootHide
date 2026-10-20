@@ -308,7 +308,7 @@ int main(void) {
         [controller customGlassScheduleIdleRefresh];
         pumpUntil(^BOOL { return controller.backdropRefreshes == 4; });
         assert(!controller.runtimeSettingsRefreshPending && controller.reloadedKeys.count == 2);
-        puts("PASS: coalesced idle refresh, tracking/drag/deceleration deferral, targeted changed rows, no-change/offscreen rows, departure cancellation and reentry");
+        puts("PASS: coalesced idle runtime/hairline work, tracking/drag/deceleration deferral, targeted changed rows, no-change/offscreen rows, departure cancellation and reentry");
     }
     return 0;
 }
@@ -350,12 +350,22 @@ def main():
         '- (id)readRuntimePreferenceValue:',
     ))
     assert 'reloadSpecifiers' not in idle_methods
-    for signature in ('- (void)customGlassRefreshSectionBackdrops', '- (void)customGlassCleanupTableHairlines'):
-        body = method(source, signature)
-        assert body.index('customGlassDeferRefreshWhileScrolling:tableView') < body.index('for (')
+    body = method(source, '- (void)customGlassCleanupTableHairlines')
+    assert body.index('customGlassDeferRefreshWhileScrolling:tableView') < body.index('for (')
+    geometry = method(source, '- (void)customGlassRefreshSectionBackdrops')
+    # UITableView can change row geometry and reorder subviews while scrolling.
+    # Do not defer the RC7 placement/stacking maintenance with the idle work.
+    assert 'customGlassDeferRefreshWhileScrolling' not in geometry
+    assert '[tableView insertSubview:glass atIndex:0]' in geometry
+    assert '[tableView sendSubviewToBack:glass]' in geometry
     display = method(source[source.index('@implementation DOSettingsController'):], '- (void)tableView:')
-    assert 'customGlassRefreshSectionBackdrops' not in display
-    assert 'customGlassScheduleIdleRefresh' in display
+    assert 'customGlassRefreshSectionBackdrops' in display
+    assert 'customGlassScheduleIdleRefresh' not in display
+    baseline = subprocess.check_output(['git', '-c', 'safe.directory=' + ROOT.as_posix(),
+        'show', 'c5380e3da4a365a8669545f0217bab02d928ca99:Application/Dopamine/UI/Settings/DOSettingsController.m'],
+        cwd=ROOT).decode('utf-8')
+    assert geometry == method(baseline, '- (void)customGlassRefreshSectionBackdrops')
+    assert display == method(baseline[baseline.index('@implementation DOSettingsController'):], '- (void)tableView:')
     assert 'test_settings_runtime_snapshot.py' in (ROOT / '.github/workflows/roothide.yml').read_text(encoding='utf-8')
     print('PASS: settings cell getters use cached values, service refresh changes no process credentials', flush=True)
     if args.check_only:
@@ -391,7 +401,8 @@ def main():
         'uikit_runtime': False, 'device_scrolling_measured': False,
         'controller_sha256': hashlib.sha256((SETTINGS / 'DOSettingsController.m').read_bytes()).hexdigest(),
         'checks': ['background service snapshot and edit preservation',
-                   'tracking/dragging/deceleration deferral', 'coalesced callbacks',
+                   'RC7 geometry/stacking and cell callback source restored to c5380e3',
+                   'runtime/hairline tracking/dragging/deceleration deferral', 'coalesced idle callbacks',
                    'only changed displayed rows reloaded', 'departure cancellation and reentry'],
     }, indent=2) + '\n', encoding='utf-8')
 
