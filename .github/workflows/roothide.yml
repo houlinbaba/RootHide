@@ -16,11 +16,6 @@ on:
         required: false
         default: false
         type: boolean
-      ui_group_test_delivery:
-        description: Approved UI scroll group test package (F1/F3 unresolved)
-        required: false
-        default: false
-        type: boolean
       a17_firmware_delivery:
         description: Approved private A17 firmware test package (F1/F3 unresolved)
         required: false
@@ -59,10 +54,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/package_single_person_research.py --preflight
-
-      - name: Check approved UI group test scope before building
-        if: inputs.ui_group_test_delivery == true
-        run: python3 .github/scripts/package_ui_group_test.py --preflight
 
       - name: Check approved private A17 firmware scope before building
         if: inputs.a17_firmware_delivery == true
@@ -272,11 +263,11 @@ jobs:
       - name: RootHide first reboot after bootstrap credential restoration
         run: python3 .github/scripts/test_bootstrap_reboot.py
 
-      - name: RootHide diagnostic export regressions
-        run: python3 .github/scripts/test_roothide_diagnostic_export.py
-
       - name: Certificate firmware acquisition regressions
         run: python3 .github/scripts/test_firmware_images.py
+
+      - name: RootHide diagnostic export regressions
+        run: python3 .github/scripts/test_roothide_diagnostic_export.py
 
       - name: Settings slow-service snapshot regressions
         run: python3 .github/scripts/test_settings_runtime_snapshot.py
@@ -343,21 +334,8 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Collect approved UI group test package
-        if: success() && inputs.ui_group_test_delivery == true
-        run: python3 .github/scripts/package_ui_group_test.py --output artifacts/ui-group-test
-
-      - name: Upload approved UI group test package
-        if: success() && inputs.ui_group_test_delivery == true
-        uses: actions/upload-artifact@v4
-        with:
-          name: ui-scroll-group-test-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/ui-group-test/
-          if-no-files-found: error
-          retention-days: 3
-
-      # Default remains text only. Explicit scoped test deliveries above do
-      # not change the unresolved findings or stable distribution eligibility.
+      # Default remains text only. Explicit private test deliveries do not
+      # change unresolved findings or stable distribution eligibility.
       - name: Collect approved private A17 firmware test package
         if: success() && inputs.a17_firmware_delivery == true
         run: python3 .github/scripts/package_a17_firmware_test.py --output artifacts/a17-firmware-test

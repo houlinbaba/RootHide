@@ -12,9 +12,9 @@ from package_single_person_research import (
     CORE, RECEIPTS, ROOT, digest, git, inspect_package, require, uuid_map, write_json,
 )
 
-BASE = '94b5c02c07fa423b06e75cd2f1e487781b038330'
+BASE = '19de4772acad5d152023088d5edc654150f34378'
 RUNTIME_ANCHOR = '19de4772acad5d152023088d5edc654150f34378'
-VERIFIED_UI = '0e208c0f81f8514e6ee4556daff6ebd7efbf9af4'
+VERIFIED_UI = '19de4772acad5d152023088d5edc654150f34378'
 FIRMWARE_COMMIT = '28829475b7f00c3c881ed03602020d0907d84eac'
 REPOSITORY = 'kulinichx/RootHide-Dev'
 REF = 'refs/heads/codex/ios17-a17-firmware-20261020'
