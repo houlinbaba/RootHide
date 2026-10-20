@@ -280,7 +280,7 @@ int main(void) {
         controller.testTable.decelerating = NO;
         pumpUntil(^BOOL { return controller.backdropRefreshes == 1; });
         assert(controller.hairlineCleanups == 1 && !controller.customGlassIdleRefreshScheduled);
-        assert([controller.reloadedKeys isEqual:@[@"appJITEnabled", @"jetsamMultiplier"]]);
+        assert(([controller.reloadedKeys isEqual:@[@"appJITEnabled", @"jetsamMultiplier"]]));
         assert(controller->_specifiers.count == 3 && controller->_specifiers[0] == jit);
         for (int i = 0; i < 30; i++) [controller customGlassScheduleIdleRefresh];
         pumpUntil(^BOOL { return controller.backdropRefreshes == 2; });
