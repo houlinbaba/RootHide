@@ -15,13 +15,15 @@ from package_single_person_research import (
 RECEIPTS = (*RECEIPTS, 'settings-scroll-tests.json')
 BASE = 'c5380e3da4a365a8669545f0217bab02d928ca99'
 RUNTIME_ANCHOR = BASE
-VERIFIED_UI = 'e68d0da158a0f89e7382df940fed040d7aeb7a66'
-VERIFIED_TESTS = 'f1c30df3f1189b8aaa75b558faa52d10ee86795c'
+VERIFIED_UI = 'b7e57433339928267b22a65b3ce2ae32c3be0c1a'
+VERIFIED_TESTS = VERIFIED_UI
 FIRMWARE_COMMIT = '28829475b7f00c3c881ed03602020d0907d84eac'
 REPOSITORY = 'kulinichx/RootHide-Dev'
 REF = 'refs/heads/codex/ios17-settings-scroll-20261020'
 SOURCE_PATHS = {
+    'Application/Dopamine/UI/DOMainViewController.m',
     'Application/Dopamine/UI/Settings/DOSettingsController.m',
+    '.github/scripts/test_runtime_identity.py',
     '.github/scripts/test_settings_runtime_snapshot.py',
 }
 DELIVERY_PATHS = {
