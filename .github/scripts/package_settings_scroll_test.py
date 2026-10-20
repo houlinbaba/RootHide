@@ -16,6 +16,7 @@ RECEIPTS = (*RECEIPTS, 'settings-scroll-tests.json')
 BASE = 'c5380e3da4a365a8669545f0217bab02d928ca99'
 RUNTIME_ANCHOR = BASE
 VERIFIED_UI = 'e68d0da158a0f89e7382df940fed040d7aeb7a66'
+VERIFIED_TESTS = 'f1c30df3f1189b8aaa75b558faa52d10ee86795c'
 FIRMWARE_COMMIT = '28829475b7f00c3c881ed03602020d0907d84eac'
 REPOSITORY = 'kulinichx/RootHide-Dev'
 REF = 'refs/heads/codex/ios17-settings-scroll-20261020'
@@ -54,10 +55,12 @@ def delivery_scope():
     head = git('rev-parse', 'HEAD').decode().strip()
     require(head == os.environ['GITHUB_SHA'], 'Checkout does not match dispatched SHA')
     git('merge-base', '--is-ancestor', VERIFIED_UI, head)
+    git('merge-base', '--is-ancestor', VERIFIED_TESTS, head)
     changed = set(git('diff', '--name-only', BASE, head).decode().splitlines())
     require(changed == SOURCE_PATHS | DELIVERY_PATHS, 'Unexpected settings scroll test source delta')
     for path in sorted(SOURCE_PATHS):
-        require(git('rev-parse', head + ':' + path) == git('rev-parse', VERIFIED_UI + ':' + path),
+        reference = VERIFIED_TESTS if path.endswith('.py') else VERIFIED_UI
+        require(git('rev-parse', head + ':' + path) == git('rev-parse', reference + ':' + path),
                 'Verified settings file changed: ' + path)
     trees = {}
     for label, revision in [('base', BASE), ('final', head)]:
@@ -71,7 +74,8 @@ def delivery_scope():
             and status['F1'] == status['F3'] == 'FAIL', 'Unresolved findings changed')
     return {
         'runtime_anchor': RUNTIME_ANCHOR, 'source_baseline': BASE,
-        'verified_ui_commit': VERIFIED_UI, 'verified_firmware_commit': FIRMWARE_COMMIT, 'final_commit': head,
+        'verified_ui_commit': VERIFIED_UI, 'verified_tests_commit': VERIFIED_TESTS,
+        'verified_firmware_commit': FIRMWARE_COMMIT, 'final_commit': head,
         'repository': REPOSITORY, 'ref': REF, 'changed_paths': sorted(changed),
         'source_tree_excluding_settings_and_delivery': trees,
         'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
@@ -137,7 +141,8 @@ def collect(output):
 def verify(directory):
     manifest = json.loads((directory / 'package-manifest.json').read_text(encoding='utf-8'))
     require(manifest['runtime_anchor'] == RUNTIME_ANCHOR and manifest['source_baseline'] == BASE
-            and manifest['verified_ui_commit'] == VERIFIED_UI and manifest['verified_firmware_commit'] == FIRMWARE_COMMIT
+            and manifest['verified_ui_commit'] == VERIFIED_UI and manifest['verified_tests_commit'] == VERIFIED_TESTS
+            and manifest['verified_firmware_commit'] == FIRMWARE_COMMIT
             and manifest['repository'] == REPOSITORY and manifest['ref'] == REF
             and manifest['classification'] == 'settings-scroll-test'
             and manifest['distributable'] is False and manifest['device_acceptance'] is False
