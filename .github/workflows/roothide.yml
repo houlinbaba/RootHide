@@ -21,6 +21,11 @@ on:
         required: false
         default: false
         type: boolean
+      settings_scroll_delivery:
+        description: Private settings scroll test on device-tested A17 baseline
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -58,6 +63,10 @@ jobs:
       - name: Check approved private A17 firmware scope before building
         if: inputs.a17_firmware_delivery == true
         run: python3 .github/scripts/package_a17_firmware_test.py --preflight
+
+      - name: Check private settings scroll test scope before building
+        if: inputs.settings_scroll_delivery == true
+        run: python3 .github/scripts/package_settings_scroll_test.py --preflight
 
       - name: Apply submodule patches
         run: |
@@ -346,6 +355,19 @@ jobs:
         with:
           name: a17-firmware-test-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: artifacts/a17-firmware-test/
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Collect private settings scroll test package
+        if: success() && inputs.settings_scroll_delivery == true
+        run: python3 .github/scripts/package_settings_scroll_test.py --output artifacts/settings-scroll-test
+
+      - name: Upload private settings scroll test package
+        if: success() && inputs.settings_scroll_delivery == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: settings-scroll-test-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/settings-scroll-test/
           if-no-files-found: error
           retention-days: 3
 
