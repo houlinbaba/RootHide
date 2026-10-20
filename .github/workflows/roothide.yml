@@ -16,6 +16,11 @@ on:
         required: false
         default: false
         type: boolean
+      ui_group_test_delivery:
+        description: Approved UI scroll group test package (F1/F3 unresolved)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -49,6 +54,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 .github/scripts/package_single_person_research.py --preflight
+
+      - name: Check approved UI group test scope before building
+        if: inputs.ui_group_test_delivery == true
+        run: python3 .github/scripts/package_ui_group_test.py --preflight
 
       - name: Apply submodule patches
         run: |
@@ -322,8 +331,21 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      # Default remains text only; the private opt-in above is the expressly
-      # approved single-person exception, not stable distribution eligibility.
+      - name: Collect approved UI group test package
+        if: success() && inputs.ui_group_test_delivery == true
+        run: python3 .github/scripts/package_ui_group_test.py --output artifacts/ui-group-test
+
+      - name: Upload approved UI group test package
+        if: success() && inputs.ui_group_test_delivery == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-scroll-group-test-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/ui-group-test/
+          if-no-files-found: error
+          retention-days: 3
+
+      # Default remains text only. Explicit scoped test deliveries above do
+      # not change the unresolved findings or stable distribution eligibility.
       - name: Upload compile research evidence only
         if: always()
         uses: actions/upload-artifact@v4
