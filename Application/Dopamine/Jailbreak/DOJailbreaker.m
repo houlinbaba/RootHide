@@ -121,14 +121,27 @@ typedef NS_ENUM(NSInteger, JBErrorCode) {
 
 - (NSError *)gatherSystemInformation
 {
-    NSString *kernelPath = [[DOEnvironmentManager sharedManager] accessibleKernelPath];
-    if (!kernelPath) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedToFindKernel userInfo:@{NSLocalizedDescriptionKey:@"Failed to find kernelcache. Ensure your device is properly connected to the internet. If it still does not work, try installing Dopamine via TrollStore instead."}];
+    DOEnvironmentManager *environment = [DOEnvironmentManager sharedManager];
+    NSError *firmwareError = nil;
+    NSDictionary<NSString *, NSString *> *images = [environment prepareKernelImagesWithError:&firmwareError];
+    NSString *kernelPath = images[@"kernelcache"];
+    if (!kernelPath) {
+        NSMutableDictionary *info = [@{NSLocalizedDescriptionKey:firmwareError.localizedDescription ?: @"Failed to prepare matching device firmware."} mutableCopy];
+        if (firmwareError) info[NSUnderlyingErrorKey] = firmwareError;
+        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedToFindKernel userInfo:info];
+    }
     NSLog(@"Kernel at %@", kernelPath);
 
-    NSString *sptmPath = [[DOEnvironmentManager sharedManager] accessibleSPTMPath];
-    NSString *txmPath = [[DOEnvironmentManager sharedManager] accessibleTXMPath];
+    NSString *sptmPath = images[@"sptm.im4p"];
+    NSString *txmPath = images[@"txm.im4p"];
+    BOOL requiresSPTM = [environment isSPTM];
+    roothide_stage_log("firmware.prepare.end kernel=%s sptm=%s txm=%s requires_sptm=%d", kernelPath.fileSystemRepresentation,
+                       sptmPath ? sptmPath.fileSystemRepresentation : "missing", txmPath ? txmPath.fileSystemRepresentation : "missing", requiresSPTM);
     if (sptmPath) NSLog(@"SPTM at %@", sptmPath);
     if (txmPath) NSLog(@"TXM at %@", txmPath);
+    if ((requiresSPTM && (!sptmPath || !txmPath)) || ((sptmPath != nil) != (txmPath != nil))) {
+        return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedToFindKernel userInfo:@{NSLocalizedDescriptionKey:@"Required SPTM/TXM firmware is missing. Prepare the matching firmware before patchfinding."}];
+    }
     
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Patchfinding") debug:NO];
     
@@ -136,6 +149,12 @@ typedef NS_ENUM(NSInteger, JBErrorCode) {
                                        sptmPath ? sptmPath.fileSystemRepresentation : NULL,
                                        txmPath ? txmPath.fileSystemRepresentation : NULL);
     if (r == 0) {
+        roothide_stage_log("firmware.xpf.loaded sptm=%d txm=%d platform=%s darwin=%s xnu=%s", gXPF.sptm != NULL, gXPF.txm != NULL,
+                           gXPF.xnuPlatform ?: "unknown", gXPF.darwinVersion ?: "unknown", gXPF.xnuBuild ?: "unknown");
+        if ((requiresSPTM && (!gXPF.sptm || !gXPF.txm)) || (sptmPath && (!gXPF.sptm || !gXPF.txm))) {
+            xpf_stop();
+            return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedKernelPatchfinding userInfo:@{NSLocalizedDescriptionKey:@"XPF did not load the required SPTM/TXM firmware."}];
+        }
         char *sets[99] = {
             "translation",
             "trustcache",
@@ -197,7 +216,9 @@ sets[idx] = NULL;
             });
         }
         if (!_systemInfoXdict) {
-            return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedKernelPatchfinding userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"XPF failed with error: (%s)", xpf_get_error()]}];
+            NSError *error = [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedKernelPatchfinding userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"XPF failed with error: (%s)", xpf_get_error() ?: "unknown"]}];
+            xpf_stop();
+            return error;
         }
         xpf_stop();
     }

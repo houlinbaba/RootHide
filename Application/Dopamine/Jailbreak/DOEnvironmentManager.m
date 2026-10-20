@@ -6,6 +6,7 @@
 //
 
 #import "DOEnvironmentManager.h"
+#import "DOFirmwareManager.h"
 #import "UIImage+JPEG2000.h"
 
 #import <sys/sysctl.h>
@@ -13,6 +14,7 @@
 #import <sys/utsname.h>
 #import <sys/stat.h>
 #import <errno.h>
+#import <string.h>
 #import <unistd.h>
 #import <spawn.h>
 #import <mach-o/dyld.h>
@@ -134,16 +136,28 @@ extern char **environ;
 {
     if (@available(iOS 17.0, *)) {
         io_registry_entry_t memoryMap = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/chosen/memory-map");
-        if (memoryMap == IO_OBJECT_NULL) return NO;
-
-        CFArrayRef keys = (CFArrayRef)IORegistryEntryCreateCFProperty(memoryMap, CFSTR(kIORegistryEntryPropertyKeysKey), kCFAllocatorDefault, 0);
-        IOObjectRelease(memoryMap);
-        if (!keys) return NO;
-
-        CFRange range = CFRangeMake(0, CFArrayGetCount(keys));
-        BOOL isSPTM = CFArrayContainsValue(keys, range, CFSTR("SPTM")) && CFArrayContainsValue(keys, range, CFSTR("TXM"));
-        CFRelease(keys);
-        return isSPTM;
+        if (memoryMap != IO_OBJECT_NULL) {
+            CFArrayRef keys = (CFArrayRef)IORegistryEntryCreateCFProperty(memoryMap, CFSTR(kIORegistryEntryPropertyKeysKey), kCFAllocatorDefault, 0);
+            IOObjectRelease(memoryMap);
+            if (keys) {
+                BOOL found = NO;
+                if (CFGetTypeID(keys) == CFArrayGetTypeID()) {
+                    CFRange range = CFRangeMake(0, CFArrayGetCount(keys));
+                    found = CFArrayContainsValue(keys, range, CFSTR("SPTM")) && CFArrayContainsValue(keys, range, CFSTR("TXM"));
+                }
+                CFRelease(keys);
+                if (found) return YES;
+            }
+        }
+        // Certificate-installed Apps may not read DeviceTree. These iOS 17
+        // CPU families use SPTM even when registry properties are unavailable.
+        uint32_t family = 0;
+        size_t size = sizeof(family);
+        if (sysctlbyname("hw.cpufamily", &family, &size, NULL, 0) == 0) {
+            return family == CPUFAMILY_ARM_BLIZZARD_AVALANCHE ||
+                   family == CPUFAMILY_ARM_EVEREST_SAWTOOTH ||
+                   family == CPUFAMILY_ARM_COLL;
+        }
     }
     return NO;
 }
@@ -1642,6 +1656,43 @@ static BOOL DOPackageManagerBundleInvalidIsReinstallable(NSString *displayName, 
     }
 }
 */
+
+- (NSDictionary<NSString *, NSString *> *)prepareKernelImagesWithError:(NSError **)error
+{
+    if (error) *error = nil;
+    BOOL trollStore = [self isInstalledThroughTrollStore];
+    BOOL requiresSPTM = [self isSPTM];
+    roothide_stage_log("firmware.prepare.begin trollstore=%d requires_sptm=%d uid=%u", trollStore, requiresSPTM, (unsigned)getuid());
+    if (trollStore || getuid() == 0) {
+        NSString *kernel = [self accessibleKernelPath];
+        NSString *sptm = [self accessibleSPTMPath];
+        NSString *txm = [self accessibleTXMPath];
+        if (!kernel || (requiresSPTM && (!sptm || !txm)) || ((sptm != nil) != (txm != nil))) {
+            if (error) *error = [NSError errorWithDomain:@"DOFirmwareErrorDomain" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Required kernel, SPTM or TXM firmware is missing from the active system."}];
+            return nil;
+        }
+        NSMutableDictionary *paths = [@{@"kernelcache":kernel} mutableCopy];
+        if (sptm) paths[@"sptm.im4p"] = sptm;
+        if (txm) paths[@"txm.im4p"] = txm;
+        return paths;
+    }
+
+    struct utsname machine = {0};
+    char board[128] = {0}, build[128] = {0};
+    size_t boardSize = sizeof(board), buildSize = sizeof(build);
+    if (uname(&machine) != 0 || sysctlbyname("hw.model", board, &boardSize, NULL, 0) != 0 ||
+        sysctlbyname("kern.osversion", build, &buildSize, NULL, 0) != 0 ||
+        !memchr(board, 0, sizeof(board)) || !memchr(build, 0, sizeof(build))) {
+        if (error) *error = [NSError errorWithDomain:@"DOFirmwareErrorDomain" code:1 userInfo:@{NSLocalizedDescriptionKey:@"Unable to read this device's firmware identity."}];
+        return nil;
+    }
+    [[DOUIManager sharedInstance] sendLog:@"Preparing device firmware" debug:NO];
+    NSString *cache = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/RootHideFirmware"];
+    return [DOFirmwareManager firmwareForDevice:[NSString stringWithUTF8String:machine.machine]
+                                         board:[NSString stringWithUTF8String:board]
+                                         build:[NSString stringWithUTF8String:build]
+                                  requiresSPTM:requiresSPTM cacheDirectory:cache error:error];
+}
 
 - (NSString *)accessibleKernelPath
 {
