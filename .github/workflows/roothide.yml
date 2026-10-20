@@ -21,6 +21,11 @@ on:
         required: false
         default: false
         type: boolean
+      a17_firmware_delivery:
+        description: Approved private A17 firmware test package (F1/F3 unresolved)
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -58,6 +63,10 @@ jobs:
       - name: Check approved UI group test scope before building
         if: inputs.ui_group_test_delivery == true
         run: python3 .github/scripts/package_ui_group_test.py --preflight
+
+      - name: Check approved private A17 firmware scope before building
+        if: inputs.a17_firmware_delivery == true
+        run: python3 .github/scripts/package_a17_firmware_test.py --preflight
 
       - name: Apply submodule patches
         run: |
@@ -349,6 +358,19 @@ jobs:
 
       # Default remains text only. Explicit scoped test deliveries above do
       # not change the unresolved findings or stable distribution eligibility.
+      - name: Collect approved private A17 firmware test package
+        if: success() && inputs.a17_firmware_delivery == true
+        run: python3 .github/scripts/package_a17_firmware_test.py --output artifacts/a17-firmware-test
+
+      - name: Upload approved private A17 firmware test package
+        if: success() && inputs.a17_firmware_delivery == true
+        uses: actions/upload-artifact@v4
+        with:
+          name: a17-firmware-test-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/a17-firmware-test/
+          if-no-files-found: error
+          retention-days: 3
+
       - name: Upload compile research evidence only
         if: always()
         uses: actions/upload-artifact@v4
