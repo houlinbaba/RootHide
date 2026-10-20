@@ -258,9 +258,8 @@ def main():
         assert forbidden not in query_ui, forbidden
     assert '__weak UIView *weakView' in query_ui and 'DORuntimeIdentityQueryStart(5.0' in query_ui
     home=(ROOT/'Application/Dopamine/UI/DOMainViewController.m').read_text(encoding='utf-8')
-    # Keep the diagnostic transport/gate, but retire its daily-use menu entry.
-    assert 'queryRootHideRuntimeIdentityFromView:' not in home
-    assert 'identifier:@"roothide-runtime-identity"' not in home
+    assert home.count('queryRootHideRuntimeIdentityFromView:')==1
+    assert 'identifier:@"roothide-runtime-identity"' in home
     folder=a.workdir or Path(tempfile.mkdtemp(prefix='runtime-identity-'))
     folder.mkdir(parents=True,exist_ok=True);folder=folder.resolve()
     (folder/'uuid').mkdir(exist_ok=True);(folder/'uuid/uuid.h').write_text(FAKE_UUID,encoding='utf-8')
