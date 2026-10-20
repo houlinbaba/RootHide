@@ -585,6 +585,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
         NSNumber *key = @(section);
         [activeKeys addObject:key];
         DOCustomLiquidGlassView *glass = self.customGlassSectionBackdropViews[key];
+        BOOL needsInitialMaterial = (glass == nil);
         if (!glass) {
             glass = [[DOCustomLiquidGlassView alloc] initWithCornerRadius:18.0 baseTintAlpha:0.038];
             glass.userInteractionEnabled = NO;
@@ -594,13 +595,18 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
         }
 
         glass.hidden = NO;
-        glass.frame = CGRectInset(sectionRect, 1.0, 0.5);
+        CGRect glassFrame = CGRectInset(sectionRect, 1.0, 0.5);
+        if (!CGRectEqualToRect(glass.frame, glassFrame))
+            glass.frame = glassFrame;
         glass.preferredCornerRadius = 18.0;
         glass.layer.cornerRadius = 18.0;
         glass.layer.maskedCorners =
             kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
             kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
-        [glass reloadMaterial];
+        // Scrolling maintains RC7 geometry and stacking without recreating
+        // unchanged filters. Appearance/theme refresh reloads existing surfaces.
+        if (needsInitialMaterial)
+            [glass reloadMaterial];
         [tableView sendSubviewToBack:glass];
     }
 
@@ -632,6 +638,11 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     [tableView setNeedsLayout];
     [tableView layoutIfNeeded];
     [self customGlassRefreshSectionBackdrops];
+
+    // Include hidden surfaces, so a later row expansion cannot reuse a stale
+    // material after a theme change. The renderer still handles trait/size changes.
+    for (DOCustomLiquidGlassView *glass in self.customGlassSectionBackdropViews.allValues)
+        [glass reloadMaterial];
 
     UIView *backButton = [self.view viewWithTag:0xC653];
     if (backButton)
@@ -879,6 +890,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
         DOExploitManager *exploitManager = [DOExploitManager sharedManager];
 
         NSNumber *buttonHeight = @(44);
+        BOOL hasActionsGroup = NO;
         
         SEL defGetter = @selector(readPreferenceValue:);
         SEL defSetter = @selector(setPreferenceValue:specifier:);
@@ -1018,6 +1030,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
                 PSSpecifier *actionsGroupSpecifier = [PSSpecifier emptyGroupSpecifier];
                 actionsGroupSpecifier.name = DOLocalizedString(@"Section_Actions");
                 [specifiers addObject:actionsGroupSpecifier];
+                hasActionsGroup = YES;
                 
                 if (envManager.isJailbroken) {
                     PSSpecifier *rootHideHealthSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:defSetter get:defGetter detail:nil cell:PSStaticTextCell edit:nil];
@@ -1114,6 +1127,21 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
             }
         }
         
+        // Reuse Actions instead of adding a diagnostic-only Glass surface.
+        // Keep export available before activation and after a device reboot.
+        if (!hasActionsGroup) {
+            PSSpecifier *actionsGroupSpecifier = [PSSpecifier emptyGroupSpecifier];
+            actionsGroupSpecifier.name = DOLocalizedString(@"Section_Actions");
+            [specifiers addObject:actionsGroupSpecifier];
+        }
+        PSSpecifier *stageLogSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:nil get:nil detail:nil cell:PSStaticTextCell edit:nil];
+        [stageLogSpecifier setProperty:DOLocalizedString(@"Menu_Share_RootHide_Log") forKey:@"title"];
+        [stageLogSpecifier setProperty:[DOButtonCell class] forKey:@"cellClass"];
+        [stageLogSpecifier setProperty:buttonHeight forKey:@"height"];
+        [stageLogSpecifier setProperty:@"square.and.arrow.up" forKey:@"image"];
+        [stageLogSpecifier setProperty:@"shareRootHideStageLogPressed" forKey:@"action"];
+        [specifiers addObject:stageLogSpecifier];
+
         PSSpecifier *bootlogoGropSpecifier = [PSSpecifier emptyGroupSpecifier];
         bootlogoGropSpecifier.name = DOLocalizedString(@"Section_Boot_Logo");
         [specifiers addObject:bootlogoGropSpecifier];
@@ -1145,15 +1173,6 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
             }
         }
 
-        // Available even after a device reboot, when jailbreak actions are hidden.
-        [specifiers addObject:[PSSpecifier emptyGroupSpecifier]];
-        PSSpecifier *stageLogSpecifier = [PSSpecifier preferenceSpecifierNamed:@"" target:self set:nil get:nil detail:nil cell:PSStaticTextCell edit:nil];
-        [stageLogSpecifier setProperty:DOLocalizedString(@"Menu_Share_RootHide_Log") forKey:@"title"];
-        [stageLogSpecifier setProperty:[DOButtonCell class] forKey:@"cellClass"];
-        [stageLogSpecifier setProperty:buttonHeight forKey:@"height"];
-        [stageLogSpecifier setProperty:@"square.and.arrow.up" forKey:@"image"];
-        [stageLogSpecifier setProperty:@"shareRootHideStageLogPressed" forKey:@"action"];
-        [specifiers addObject:stageLogSpecifier];
         _specifiers = specifiers;
     }
     return _specifiers;

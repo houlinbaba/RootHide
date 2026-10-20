@@ -151,8 +151,11 @@ def main():
     assert '@"launchd"' in collector
     assert '@"/Library/Logs/CrashReporter"' in export and '@"/var/root/Library/Logs/CrashReporter"' in export
     home = (UI / 'DOMainViewController.m').read_text(encoding='utf-8')
-    assert 'identifier:@"roothide-diagnostics"' in home
-    assert 'shareRootHideStageLogFromView:self.view' in home
+    assert 'identifier:@"roothide-diagnostics"' not in home
+    settings = (UI / 'Settings/DOSettingsController.m').read_text(encoding='utf-8')
+    assert settings.count('@"shareRootHideStageLogPressed" forKey:@"action"') == 1
+    export_button = extract(settings, '- (void)shareRootHideStageLogPressed')
+    assert 'shareRootHideStageLogFromView:self.view' in export_button
     assert '[settingsCard addGestureRecognizer:' in home
     assert 'action:@selector(shareRootHideLogFromLongPress:)' in home
     gesture = home.split('- (void)shareRootHideLogFromLongPress:', 1)[1].split('- (void)applyCustomGlassHomeAppearance', 1)[0]
