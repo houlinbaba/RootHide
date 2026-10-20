@@ -389,6 +389,9 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 @interface DOSettingsController ()
 
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, DOCustomLiquidGlassView *> *customGlassSectionBackdropViews;
+@property(nonatomic) BOOL customGlassIdleRefreshScheduled;
+@property(nonatomic) BOOL runtimeSettingsRefreshPending;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *runtimeSettingsDisplayedValues;
 
 @end
 
@@ -462,6 +465,8 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 {
     UITableView *tableView = [self valueForKey:@"table"];
     if (!tableView)
+        return;
+    if ([self customGlassDeferRefreshWhileScrolling:tableView])
         return;
 
     // Remove only horizontal 1-2 px chrome. Vertical scroll indicators are
@@ -554,6 +559,8 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 {
     UITableView *tableView = [self valueForKey:@"table"];
     if (!tableView)
+        return;
+    if ([self customGlassDeferRefreshWhileScrolling:tableView])
         return;
 
     if (!self.customGlassSectionBackdropViews)
@@ -743,8 +750,46 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
             if (currentIndexPath)
                 [weakSelf customGlassStyleVisibleCell:strongCell atIndexPath:currentIndexPath];
         }
-        [weakSelf customGlassRefreshSectionBackdrops];
+        [weakSelf customGlassScheduleIdleRefresh];
     });
+}
+
+- (BOOL)customGlassDeferRefreshWhileScrolling:(UITableView *)tableView
+{
+    if (tableView.tracking || tableView.dragging || tableView.decelerating) {
+        [self customGlassScheduleIdleRefresh];
+        return YES;
+    }
+    return NO;
+}
+
+- (void)customGlassScheduleIdleRefresh
+{
+    if (self.customGlassIdleRefreshScheduled)
+        return;
+    self.customGlassIdleRefreshScheduled = YES;
+    // Tracking mode must not run all-section material rebuilds. Coalesce cell
+    // callbacks and also wait for deceleration before doing the RC7 refresh.
+    [self performSelector:@selector(customGlassPerformIdleRefresh) withObject:nil
+               afterDelay:0 inModes:@[NSDefaultRunLoopMode]];
+}
+
+- (void)customGlassPerformIdleRefresh
+{
+    UITableView *tableView = [self valueForKey:@"table"];
+    if (!self.isViewLoaded || !self.view.window || !tableView) {
+        self.customGlassIdleRefreshScheduled = NO;
+        return;
+    }
+    if (tableView.tracking || tableView.dragging || tableView.decelerating) {
+        [self performSelector:@selector(customGlassPerformIdleRefresh) withObject:nil
+                   afterDelay:0.05 inModes:@[NSDefaultRunLoopMode]];
+        return;
+    }
+    self.customGlassIdleRefreshScheduled = NO;
+    [self applyPendingRuntimeSettingsRefresh];
+    [self customGlassRefreshSectionBackdrops];
+    [self customGlassCleanupTableHairlines];
 }
 
 - (void)viewDidLayoutSubviews
@@ -769,6 +814,16 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     dispatch_async(dispatch_get_main_queue(), ^{
         [weakSelf customGlassRefreshPageAppearance];
     });
+    if (self.runtimeSettingsRefreshPending)
+        [self customGlassScheduleIdleRefresh];
+}
+
+- (void)viewWillDisappear:(BOOL)animated
+{
+    [super viewWillDisappear:animated];
+    [NSObject cancelPreviousPerformRequestsWithTarget:self
+        selector:@selector(customGlassPerformIdleRefresh) object:nil];
+    self.customGlassIdleRefreshScheduled = NO;
 }
 
 - (void)viewDidAppear:(BOOL)animated
@@ -1198,8 +1253,38 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 {
     DORuntimeSettingsSnapshot *snapshot = [self runtimeSettingsSnapshot];
     __weak typeof(self) weakSelf = self;
-    [snapshot refreshWithCompletion:^{ [weakSelf reloadSpecifiers]; }];
-    return [snapshot runtimeValueForKey:[specifier propertyForKey:@"key"]] ?: [self readPreferenceValue:specifier];
+    [snapshot refreshWithCompletion:^{
+        weakSelf.runtimeSettingsRefreshPending = YES;
+        [weakSelf customGlassScheduleIdleRefresh];
+    }];
+    NSString *key = [specifier propertyForKey:@"key"];
+    NSNumber *value = [snapshot runtimeValueForKey:key] ?: [self readPreferenceValue:specifier];
+    if (!self.runtimeSettingsDisplayedValues)
+        self.runtimeSettingsDisplayedValues = [NSMutableDictionary dictionary];
+    if (key && value)
+        self.runtimeSettingsDisplayedValues[key] = value;
+    return value;
+}
+
+- (void)applyPendingRuntimeSettingsRefresh
+{
+    if (!self.runtimeSettingsRefreshPending)
+        return;
+    self.runtimeSettingsRefreshPending = NO;
+    DORuntimeSettingsSnapshot *snapshot = [self runtimeSettingsSnapshot];
+    // These values do not change the row structure. Rebuild only a row whose
+    // displayed value changed, after scrolling; preserve all other specifiers.
+    for (PSSpecifier *specifier in [_specifiers copy]) {
+        NSString *key = [specifier propertyForKey:@"key"];
+        NSNumber *displayed = key ? self.runtimeSettingsDisplayedValues[key] : nil;
+        if (!displayed)
+            continue;
+        NSNumber *value = [snapshot runtimeValueForKey:key] ?: [self readPreferenceValue:specifier];
+        if (![displayed isEqual:value]) {
+            self.runtimeSettingsDisplayedValues[key] = value;
+            [self reloadSpecifier:specifier animated:NO];
+        }
+    }
 }
 
 - (void)shareRootHideStageLogPressed

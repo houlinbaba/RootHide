@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Verify slow settings services cannot block cell getters or overwrite edits."""
 import argparse
+import hashlib
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -162,6 +164,157 @@ int main(void) {
 '''
 
 
+SCROLL_HARNESS = r'''
+#import <Foundation/Foundation.h>
+#import "DORuntimeSettingsSnapshot.h"
+#include <assert.h>
+#include <stdio.h>
+@interface UITableView : NSObject
+@property BOOL tracking, dragging, decelerating;
+@end
+@implementation UITableView @end
+@interface DOTestView : NSObject
+@property(nonatomic, strong) NSObject *window;
+@end
+@implementation DOTestView @end
+@interface PSSpecifier : NSObject
+@property(nonatomic, strong) NSString *key;
+- (id)propertyForKey:(NSString *)key;
+@end
+@implementation PSSpecifier
+- (id)propertyForKey:(NSString *)key { return [key isEqual:@"key"] ? self.key : nil; }
+@end
+@interface DOTestControllerBase : NSObject
+- (void)viewWillDisappear:(BOOL)animated;
+@end
+@implementation DOTestControllerBase
+- (void)viewWillDisappear:(BOOL)animated { (void)animated; }
+@end
+@interface DOSettingsController : DOTestControllerBase {
+@public NSArray *_specifiers;
+}
+@property BOOL customGlassIdleRefreshScheduled, runtimeSettingsRefreshPending, isViewLoaded;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *runtimeSettingsDisplayedValues;
+@property(nonatomic, strong) DOTestView *view;
+@property(nonatomic, strong) UITableView *testTable;
+@property(nonatomic, strong) DORuntimeSettingsSnapshot *testSnapshot;
+@property(nonatomic, strong) NSMutableArray *reloadedKeys;
+@property NSUInteger backdropRefreshes, hairlineCleanups;
+- (BOOL)customGlassDeferRefreshWhileScrolling:(UITableView *)tableView;
+- (void)customGlassScheduleIdleRefresh;
+- (void)customGlassPerformIdleRefresh;
+- (void)applyPendingRuntimeSettingsRefresh;
+- (id)readRuntimePreferenceValue:(PSSpecifier *)specifier;
+- (id)readPreferenceValue:(PSSpecifier *)specifier;
+- (DORuntimeSettingsSnapshot *)runtimeSettingsSnapshot;
+- (void)reloadSpecifier:(PSSpecifier *)specifier animated:(BOOL)animated;
+- (void)customGlassRefreshSectionBackdrops;
+- (void)customGlassCleanupTableHairlines;
+@end
+@implementation DOSettingsController
+- (id)valueForKey:(NSString *)key {
+    return [key isEqual:@"table"] ? self.testTable : [super valueForKey:key];
+}
+- (DORuntimeSettingsSnapshot *)runtimeSettingsSnapshot { return self.testSnapshot; }
+- (id)readPreferenceValue:(PSSpecifier *)specifier {
+    return [specifier.key isEqual:@"jetsamMultiplier"] ? @6 : @YES;
+}
+- (void)reloadSpecifier:(PSSpecifier *)specifier animated:(BOOL)animated {
+    assert(!animated && !self.testTable.tracking && !self.testTable.dragging && !self.testTable.decelerating);
+    [self.reloadedKeys addObject:specifier.key];
+    (void)[self readRuntimePreferenceValue:specifier];
+}
+- (void)customGlassRefreshSectionBackdrops {
+    assert(!self.testTable.tracking && !self.testTable.dragging && !self.testTable.decelerating);
+    self.backdropRefreshes++;
+}
+- (void)customGlassCleanupTableHairlines { self.hairlineCleanups++; }
+// PRODUCTION_METHODS
+@end
+static void pumpFor(NSTimeInterval interval) {
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:interval];
+    while (deadline.timeIntervalSinceNow > 0)
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.005]];
+}
+static void pumpUntil(BOOL (^done)(void)) {
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:3];
+    while (!done() && deadline.timeIntervalSinceNow > 0) pumpFor(0.005);
+    assert(done());
+}
+int main(void) {
+    @autoreleasepool {
+        DOSettingsController *controller = [DOSettingsController new];
+        controller.isViewLoaded = YES;
+        controller.view = [DOTestView new];
+        controller.view.window = [NSObject new];
+        controller.testTable = [UITableView new];
+        controller.reloadedKeys = [NSMutableArray array];
+        dispatch_semaphore_t started = dispatch_semaphore_create(0);
+        dispatch_semaphore_t release = dispatch_semaphore_create(0);
+        controller.testSnapshot = [[DORuntimeSettingsSnapshot alloc] initWithLoader:^{
+            dispatch_semaphore_signal(started);
+            assert(dispatch_semaphore_wait(release, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) == 0);
+            return @{@"appJITEnabled": @NO, @"jetsamMultiplier": @8, @"dyldPatchEnabled": @NO};
+        }];
+        PSSpecifier *jit = [PSSpecifier new]; jit.key = @"appJITEnabled";
+        PSSpecifier *jetsam = [PSSpecifier new]; jetsam.key = @"jetsamMultiplier";
+        PSSpecifier *offscreen = [PSSpecifier new]; offscreen.key = @"dyldPatchEnabled";
+        controller->_specifiers = @[jit, jetsam, offscreen];
+        assert([[controller readRuntimePreferenceValue:jit] isEqual:@YES]);
+        assert([[controller readRuntimePreferenceValue:jetsam] isEqual:@6]);
+        assert(dispatch_semaphore_wait(started, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC)) == 0);
+        controller.testTable.tracking = YES;
+        for (int i = 0; i < 30; i++) assert([controller customGlassDeferRefreshWhileScrolling:controller.testTable]);
+        dispatch_semaphore_signal(release);
+        pumpUntil(^BOOL { return controller.runtimeSettingsRefreshPending; });
+        pumpFor(0.08);
+        assert(controller.backdropRefreshes == 0 && controller.hairlineCleanups == 0 && controller.reloadedKeys.count == 0);
+        controller.testTable.tracking = NO;
+        controller.testTable.dragging = YES;
+        pumpFor(0.08);
+        assert(controller.backdropRefreshes == 0 && controller.reloadedKeys.count == 0);
+        controller.testTable.dragging = NO;
+        controller.testTable.decelerating = YES;
+        pumpFor(0.08);
+        assert(controller.backdropRefreshes == 0 && controller.reloadedKeys.count == 0);
+        controller.testTable.decelerating = NO;
+        pumpUntil(^BOOL { return controller.backdropRefreshes == 1; });
+        assert(controller.hairlineCleanups == 1 && !controller.customGlassIdleRefreshScheduled);
+        assert([controller.reloadedKeys isEqual:@[@"appJITEnabled", @"jetsamMultiplier"]]);
+        assert(controller->_specifiers.count == 3 && controller->_specifiers[0] == jit);
+        for (int i = 0; i < 30; i++) [controller customGlassScheduleIdleRefresh];
+        pumpUntil(^BOOL { return controller.backdropRefreshes == 2; });
+        pumpFor(0.08);
+        assert(controller.backdropRefreshes == 2 && controller.hairlineCleanups == 2);
+        controller.runtimeSettingsRefreshPending = YES;
+        [controller customGlassScheduleIdleRefresh];
+        pumpUntil(^BOOL { return controller.backdropRefreshes == 3; });
+        assert(controller.reloadedKeys.count == 2); // Same values never reload rows.
+        controller.testTable.decelerating = YES;
+        [controller customGlassScheduleIdleRefresh];
+        pumpFor(0.03);
+        [controller viewWillDisappear:NO];
+        assert(!controller.customGlassIdleRefreshScheduled);
+        controller.testTable.decelerating = NO;
+        pumpFor(0.1);
+        assert(controller.backdropRefreshes == 3); // Canceled work cannot refresh a departed page.
+        controller.view.window = nil;
+        controller.runtimeSettingsRefreshPending = YES;
+        [controller customGlassScheduleIdleRefresh];
+        pumpFor(0.03);
+        assert(controller.backdropRefreshes == 3 && !controller.customGlassIdleRefreshScheduled);
+        assert(controller.runtimeSettingsRefreshPending);
+        controller.view.window = [NSObject new];
+        [controller customGlassScheduleIdleRefresh];
+        pumpUntil(^BOOL { return controller.backdropRefreshes == 4; });
+        assert(!controller.runtimeSettingsRefreshPending && controller.reloadedKeys.count == 2);
+        puts("PASS: coalesced idle refresh, tracking/drag/deceleration deferral, targeted changed rows, no-change/offscreen rows, departure cancellation and reentry");
+    }
+    return 0;
+}
+'''
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--check-only', action='store_true')
@@ -186,6 +339,23 @@ def main():
                          method(roothide, 'int jbclient_dyld_patch_enabled_get(')))
     getter = method(source, '- (id)readRuntimePreferenceValue:')
     assert '?: [self readPreferenceValue:specifier]' in getter
+    assert 'reloadSpecifiers' not in getter
+    assert 'customGlassScheduleIdleRefresh' in getter
+    idle_methods = '\n'.join(method(source, signature) for signature in (
+        '- (BOOL)customGlassDeferRefreshWhileScrolling:',
+        '- (void)customGlassScheduleIdleRefresh',
+        '- (void)customGlassPerformIdleRefresh',
+        '- (void)applyPendingRuntimeSettingsRefresh',
+        '- (void)viewWillDisappear:',
+        '- (id)readRuntimePreferenceValue:',
+    ))
+    assert 'reloadSpecifiers' not in idle_methods
+    for signature in ('- (void)customGlassRefreshSectionBackdrops', '- (void)customGlassCleanupTableHairlines'):
+        body = method(source, signature)
+        assert body.index('customGlassDeferRefreshWhileScrolling:tableView') < body.index('for (')
+    display = method(source[source.index('@implementation DOSettingsController'):], '- (void)tableView:')
+    assert 'customGlassRefreshSectionBackdrops' not in display
+    assert 'customGlassScheduleIdleRefresh' in display
     assert 'test_settings_runtime_snapshot.py' in (ROOT / '.github/workflows/roothide.yml').read_text(encoding='utf-8')
     print('PASS: settings cell getters use cached values, service refresh changes no process credentials', flush=True)
     if args.check_only:
@@ -207,6 +377,23 @@ def main():
                         '-fsanitize=address,undefined', '-framework', 'Foundation', '-I', str(SETTINGS), str(source_path), '-o', str(binary)], check=True)
         subprocess.run([str(binary)], check=True, timeout=15,
                        env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0', 'UBSAN_OPTIONS': 'halt_on_error=1'})
+        source_path.write_text(SCROLL_HARNESS.replace('// PRODUCTION_METHODS', idle_methods), encoding='utf-8')
+        subprocess.run(['xcrun', 'clang', '-fobjc-arc', '-fblocks', '-D_DARWIN_C_SOURCE', '-Wall', '-Wextra', '-Werror',
+                        '-fsanitize=address,undefined', '-framework', 'Foundation', '-I', str(SETTINGS), str(source_path), '-o', str(binary)], check=True)
+        subprocess.run([str(binary)], check=True, timeout=15,
+                       env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=0', 'UBSAN_OPTIONS': 'halt_on_error=1'})
+
+    artifacts = ROOT / 'artifacts'
+    artifacts.mkdir(exist_ok=True)
+    (artifacts / 'settings-scroll-tests.json').write_text(json.dumps({
+        'pass': True,
+        'kind': 'production Objective-C methods with Foundation and table/controller doubles',
+        'uikit_runtime': False, 'device_scrolling_measured': False,
+        'controller_sha256': hashlib.sha256((SETTINGS / 'DOSettingsController.m').read_bytes()).hexdigest(),
+        'checks': ['background service snapshot and edit preservation',
+                   'tracking/dragging/deceleration deferral', 'coalesced callbacks',
+                   'only changed displayed rows reloaded', 'departure cancellation and reentry'],
+    }, indent=2) + '\n', encoding='utf-8')
 
 
 if __name__ == '__main__':
