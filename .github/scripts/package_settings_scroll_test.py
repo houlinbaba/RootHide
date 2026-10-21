@@ -26,7 +26,7 @@ VERIFIED_TERMINAL_BASE = '6cef532e683637892e59746a15e6a352527c7813'
 TERMINAL_SOURCE_SHA256 = {
     ".github/scripts/test_spawn_pid.py": "6e4c2ef36150ace9c37b098628329497db402beb77eaa48e0797ab3e03bbd1c1",
     ".github/scripts/test_runtime_identity.py": "5c087bf70c6dcb21e382788da5a77a719e3696697db65e67a4eee9206c611da4",
-    ".github/scripts/test_terminal_diagnostics.py": "8c77b62da3b4fa1b349198ed7fef46db517676e898e14ca4e5102337771fa2b2",
+    ".github/scripts/test_terminal_diagnostics.py": "3b516ce028688aaac0a056de2b2e7d24355a9f25ba67eeb7513361902eedcda3",
     ".github/scripts/test_roothide_diagnostic_export.py": "e2f2e854a80c9dd1c742b57d9df87ed8d90bb60fa8b16515f515a37df85638e3",
     "Application/Dopamine/UI/DOUIManager.m": "02a53d8b5c84e7e3e622de25fef459cd2ecef214e3892ca0ba786332105d0974",
     "Application/Dopamine/UI/DODiagnosticLogQuery.h": "f9e871ec1107a14aee2843808e17e62bb5f5439419a675df3df4aadf5402e91e",
@@ -39,7 +39,11 @@ TERMINAL_SOURCE_SHA256 = {
     "BaseBin/systemhook/src/common/runtime_diagnostics.c": "71351cc8212a1f06ace32de327ad3dba6711a4b94ff30cd8859cf5befdd6936e",
     "BaseBin/systemhook/src/common/runtime_diagnostics.h": "1e0ee6ec98beb071ec19ea123f3d3ca7aea0412daf1863fb7c86c416d785fed0",
     "BaseBin/systemhook/src/main.c": "8ab1055c99ccd2471182c28cea93f11d5a963079a2b1a2b4b02026cd1b597dd0",
-    "BaseBin/systemhook/src/roothider_main.c": "e37c8064605be3b958000b4b51ea791b9dd67a82d60548bf35b6994390eb14ae"
+    "BaseBin/systemhook/src/roothider_main.c": "e37c8064605be3b958000b4b51ea791b9dd67a82d60548bf35b6994390eb14ae",
+    ".github/scripts/test_roothide_credentials.py": "73ddfb036edacd3ab26e3c615edb7d277ccbe9c982869504675d42b366348bad",
+    ".github/scripts/test_dyld_entry_redirect.py": "d861c1eb99e08cf92bb7b00df5fd5ae7f81030509c7d015bd2b2ef87840df6e8",
+    "BaseBin/launchdhook/src/roothider.m": "129f4257016483326d2c230c21bdf2b229247fb64be05f2c860c4e649e9f8bca",
+    "BaseBin/libjailbreak/src/roothider/dyld_patch.m": "d288d8b7fe98daa69de291ae2dca7ca899832c70381ee3491b4b1702443205e0"
 }
 TERMINAL_PATHS = set(TERMINAL_SOURCE_SHA256)
 FIRMWARE_COMMIT = '28829475b7f00c3c881ed03602020d0907d84eac'
@@ -128,7 +132,7 @@ def delivery_scope():
         'classification': 'terminal-session-diagnostics-test', 'distributable': False,
         'F1': 'FAIL', 'F3': 'FAIL', 'device_acceptance': False,
         'known_limitations': [
-            'Bounded terminal startup/spawn/exec tracing and fixed read-only log descriptors only; no terminal fix is claimed. Firmware and runtime outside the pinned diagnostic paths match c5380e3.',
+            'Terminal startup/spawn/exec tracing, fixed read-only log descriptors and local credential-helper/dyld failure-stage logging only; no terminal fix is claimed. Firmware and runtime outside the pinned diagnostic paths match c5380e3.',
             'Terminal logging is best effort. No child exit-status hook is installed; successful spawn does not establish a working terminal session.',
             'Five-second App timeout abandons late results but cannot cancel synchronous service work. One outstanding diagnostic worker is retained until return.',
             'Timing reports elapsed main-thread work in overlapping categories, not FPS or GPU time. Terminal EOF may produce no crash report.',

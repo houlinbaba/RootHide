@@ -82,10 +82,29 @@ static int no_entry, fake_thread_count=2;
 static uint32_t emitted[5];
 static struct DYLDINFO dyld={0x100,0x80,0x800,0x8000,0x1000,0x2000,(void*)0x700000};
 static void log_message(const char *fmt, ...) { (void)fmt; }
+static int failure_logs, logged_raw;
+static const char *logged_phase, *logged_domain;
+static const char *trampoline_format;
+static int trampoline_raw, trampoline_logs;
+static void log_file(const char *path,const char *fmt,...) {
+    assert(!strcmp(path,ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH));
+    if(!strcmp(fmt,"dyld.patch.failed target_pid=%d phase=%s domain=%s raw=%d")) {
+        __builtin_va_list args;__builtin_va_start(args,fmt);
+        assert(__builtin_va_arg(args,int)==969);
+        logged_phase=__builtin_va_arg(args,const char *);
+        logged_domain=__builtin_va_arg(args,const char *);
+        logged_raw=__builtin_va_arg(args,int);__builtin_va_end(args);failure_logs++;
+    }
+    if(!strncmp(fmt,"dyld.trampoline.failed ",23)) {
+        __builtin_va_list args;__builtin_va_start(args,fmt);
+        trampoline_raw=__builtin_va_arg(args,int);__builtin_va_end(args);
+        trampoline_format=fmt;trampoline_logs++;
+    }
+}
 #define JBLogDebug log_message
 #define JBLogError log_message
 #define roothide_stage_log log_message
-#define roothide_stage_file_log log_message
+#define roothide_stage_file_log log_file
 static const char *mach_error_string(int n) { (void)n;return "mock"; }
 static mach_port_t mach_task_self(void) { return 1; }
 static struct DYLDINFO *loadDyldInfo(const char *p) { (void)p;return &dyld; }
@@ -175,13 +194,19 @@ static void reset(void) {
     assert(!task_ports && !thread_ports && !arrays);
     failure=fail_write_at=fail_protect_at=old_pac=0;fake_thread_count=2;no_entry=0;
     redirects=core_writes=remote_frees=old_frees=infos=allow_invalid=protects=writes=0;
+    failure_logs=logged_raw=0;logged_phase=logged_domain=NULL;
+    trampoline_format=NULL;trampoline_raw=trampoline_logs=0;
     memset(emitted,0,sizeof(emitted));
 }
 static void cleaned(void) { assert(!task_ports && !thread_ports && !arrays); }
+static void failed_at(const char *phase,const char *domain,int raw) {
+    assert(failure_logs==1 && !strcmp(logged_phase,phase) && !strcmp(logged_domain,domain) && logged_raw==raw);
+}
 int main(void) {
     for(test_os=17;test_os<=18;test_os++){
         reset();assert(!proc_patch_dyld_internal(969,false));cleaned();
         assert(redirects==1 && !core_writes && !old_frees && !remote_frees && infos==1 && allow_invalid==1);
+        assert(!failure_logs);
         assert(emitted[4]==0xD61F0000);
         uint64_t destination=((uint64_t)((emitted[0]>>5)&0xffff)<<48)|
             ((uint64_t)((emitted[1]>>5)&0xffff)<<32)|((uint64_t)((emitted[2]>>5)&0xffff)<<16)|((emitted[3]>>5)&0xffff);
@@ -190,17 +215,32 @@ int main(void) {
             if(err==6 || err==9 || err==10 || err==11)continue;
             reset();failure=err;assert(proc_patch_dyld_internal(969,false));cleaned();assert(!core_writes);
             assert(remote_frees==(err>=4));
+            const char *phases[]={"", "task_for_pid", "task_info", "vm_remap", "proc_find", "proc_task",
+                "", "task_threads", "thread_get_state", "", "", "", "metadata"};
+            failed_at(phases[err],err<=3 || err==7 || err==8?"mach":err==12?"patch_status":"validation",
+                err<=3 || err==7 || err==8?5:-1);
         }
         for(int err=1;err<=3;err++){
             reset();fail_protect_at=err;assert(proc_patch_dyld_internal(969,false));cleaned();
             assert(!core_writes && !infos && remote_frees==1);
+            failed_at("launchd_trampoline","patch_status",-1);
+            const char *formats[]={"", "dyld.trampoline.failed phase=header_protect domain=mach raw=%d",
+                "dyld.trampoline.failed phase=entry_protect domain=mach raw=%d",
+                "dyld.trampoline.failed phase=entry_execute domain=mach raw=%d"};
+            assert(trampoline_logs==1 && trampoline_raw==5 && !strcmp(trampoline_format,formats[err]));
         }
         for(int err=1;err<=2;err++){
             reset();fail_write_at=err;assert(proc_patch_dyld_internal(969,false));cleaned();
             assert(!core_writes && !infos && remote_frees==1);
+            failed_at("launchd_trampoline","patch_status",-1);
+            const char *formats[]={"", "dyld.trampoline.failed phase=header_write domain=mach raw=%d",
+                "dyld.trampoline.failed phase=entry_write domain=mach raw=%d"};
+            assert(trampoline_logs==1 && trampoline_raw==5 && !strcmp(trampoline_format,formats[err]));
         }
         reset();fake_thread_count=0;assert(proc_patch_dyld_internal(969,false));cleaned();assert(!redirects && remote_frees==1);
+        failed_at("thread_count","validation",-1);
         reset();no_entry=1;assert(proc_patch_dyld_internal(969,false));cleaned();assert(!redirects && remote_frees==1);
+        failed_at("entry_not_found","validation",-1);
     }
     /* The signed helpers keep the working baseline route. In particular,
      * removing old dyld precedes the metadata update on this route. */
@@ -300,6 +340,8 @@ typedef unsigned long size_t;
 extern void *malloc(size_t), *memcpy(void *,const void *,size_t);
 extern void free(void *);
 extern int memcmp(const void *,const void *,size_t);
+extern int strcmp(const char *,const char *);
+extern int strncmp(const char *,const char *,size_t);
 '''
             prefix = '\n'.join(line for line in PREFIX.splitlines() if not line.startswith('#include'))
             syntax.write_text(headers + prefix + hook + production_patch, encoding='utf-8')

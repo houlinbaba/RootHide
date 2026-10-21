@@ -56,26 +56,49 @@ struct _posix_spawn_args_desc { posix_spawnattr_t attrp; };
 #endif
 static int spawn_calls, patch_calls, continue_calls, kill_calls, patch_error, spawn_error;
 static int versions, change_version;
+static int flags_error, csflags_error, resume_error, no_version, bad_pid;
+static int prepare_logs, logged_raw, logged_errno, logged_result;
+static const char *logged_phase, *logged_domain;
+#define ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH "/mock/stage.log"
+static void roothide_stage_file_log(const char *path,const char *fmt,...) {
+    assert(!strcmp(path,ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH));
+    assert(!strncmp(fmt,"credential.helper.prepare ",26));
+    __builtin_va_list args;__builtin_va_start(args,fmt);
+    logged_phase=__builtin_va_arg(args,const char *);
+    (void)__builtin_va_arg(args,int);
+    logged_domain=__builtin_va_arg(args,const char *);
+    logged_raw=__builtin_va_arg(args,int);logged_errno=__builtin_va_arg(args,int);
+    logged_result=__builtin_va_arg(args,int);
+    (void)__builtin_va_arg(args,int);__builtin_va_end(args);prepare_logs++;
+}
 static const char *envbuf_getenv(char *const env[],const char *key) {
     if(!env)return NULL;
     for(unsigned i=0;env[i];i++)if(!strncmp(env[i],key,strlen(key)) && env[i][strlen(key)]=='=')return env[i]+strlen(key)+1;
     return NULL;
 }
 static bool is_dopamine_app(const char *path) { return !strcmp(path,"/Dopamine.app/Dopamine"); }
-static int posix_spawnattr_getflags(posix_spawnattr_t *a,short *f) { *f=*a;return 0; }
+static int posix_spawnattr_getflags(posix_spawnattr_t *a,short *f) { *f=*a;return flags_error; }
 static int posix_spawnattr_setflags(posix_spawnattr_t *a,short f) { *a=f;return 0; }
 static int __posix_spawn_orig_wrapper(pid_t *p,const char *path,struct _posix_spawn_args_desc *d,char *const argv[],char *const env[]) {
     (void)path;(void)argv;(void)env;assert(d->attrp & POSIX_SPAWN_START_SUSPENDED);
-    spawn_calls++;if(spawn_error)return spawn_error;*p=42;return 0;
+    spawn_calls++;if(spawn_error)return spawn_error;*p=bad_pid?0:42;return 0;
 }
-static int proc_get_pidversion(pid_t p) { assert(p==42);return change_version && versions++ ? 56 : 55; }
-static int proc_patch_csflags(pid_t p) { assert(p==42);patch_calls++;return 0; }
+static int proc_get_pidversion(pid_t p) { assert(p==42);if(no_version)return 0;return change_version && versions++ ? 56 : 55; }
+static int proc_patch_csflags(pid_t p) { assert(p==42);patch_calls++;return csflags_error; }
 static int roothide_patch_proc_ex(pid_t p,bool force) { assert(p==42 && force);patch_calls++;return patch_error; }
-static int kill(pid_t p,int sig) { assert(p==42);if(sig==SIGCONT)continue_calls++;else{assert(sig==SIGKILL);kill_calls++;}return 0; }
+static int kill(pid_t p,int sig) { assert(p==42);if(sig==SIGCONT){continue_calls++;if(resume_error){errno=EPERM;return -1;}}else{assert(sig==SIGKILL);kill_calls++;errno=ESRCH;}return 0; }
 '''
 
 SPAWN_CASES = r'''
-static void reset_spawn(void) { spawn_calls=patch_calls=continue_calls=kill_calls=patch_error=spawn_error=versions=change_version=0; }
+static void reset_spawn(void) {
+    spawn_calls=patch_calls=continue_calls=kill_calls=patch_error=spawn_error=versions=change_version=0;
+    flags_error=csflags_error=resume_error=no_version=bad_pid=prepare_logs=0;
+    logged_raw=logged_errno=logged_result=0;logged_phase=logged_domain=NULL;
+}
+static void logged(const char *phase,const char *domain,int raw,int result) {
+    assert(prepare_logs==1 && !strcmp(logged_phase,phase) && !strcmp(logged_domain,domain));
+    assert(logged_raw==raw && logged_result==result);
+}
 int main(void) {
     char *mainEnv[]={RH_CREDENTIAL_MAIN_ONLY_ENV "=1",NULL};
     char *env[]={RH_CREDENTIAL_HELPER_ENV "=1",NULL};
@@ -87,14 +110,28 @@ int main(void) {
     assert(spawn_calls==1);
     reset_spawn();assert(!spawn_credential_helper(&p,"/setuid-tool",&d,argv,env));
     assert(p==42 && patch_calls==2 && !continue_calls && d.attrp==POSIX_SPAWN_START_SUSPENDED);
+    logged("complete","none",0,0);
     reset_spawn();d.attrp=0;assert(!spawn_credential_helper(&p,"/setuid-tool",&d,argv,env));
     assert(continue_calls==1 && d.attrp==0);
     reset_spawn();patch_error=1;assert(spawn_credential_helper(&p,"/setuid-tool",&d,argv,env)==EIO);
     assert(kill_calls==1 && !continue_calls && d.attrp==0);
+    logged("dyld_patch","patch_status",1,EIO);
     reset_spawn();spawn_error=ENOENT;assert(spawn_credential_helper(&p,"/setuid-tool",&d,argv,env)==ENOENT);
     assert(!patch_calls && !kill_calls && d.attrp==0);
+    logged("spawn","posix_status",ENOENT,ENOENT);
     reset_spawn();change_version=1;assert(spawn_credential_helper(&p,"/setuid-tool",&d,argv,env)==EIO);
     assert(!continue_calls && !kill_calls && d.attrp==0);
+    logged("resume_pidversion","validation",56,EIO);
+    reset_spawn();flags_error=EINVAL;assert(spawn_credential_helper(&p,"/setuid-tool",&d,argv,env)==EINVAL);
+    logged("getflags","posix_status",EINVAL,EINVAL);assert(!spawn_calls);
+    reset_spawn();bad_pid=1;assert(spawn_credential_helper(&p,"/setuid-tool",&d,argv,env)==EIO);
+    logged("child_pid","validation",0,EIO);assert(!patch_calls && !kill_calls);
+    reset_spawn();no_version=1;assert(spawn_credential_helper(&p,"/setuid-tool",&d,argv,env)==EIO);
+    logged("pidversion","validation",0,EIO);assert(!patch_calls && !kill_calls);
+    reset_spawn();csflags_error=-1;assert(spawn_credential_helper(&p,"/setuid-tool",&d,argv,env)==EIO);
+    logged("csflags","patch_status",-1,EIO);assert(patch_calls==1 && kill_calls==1 && !continue_calls);
+    reset_spawn();resume_error=1;assert(spawn_credential_helper(&p,"/setuid-tool",&d,argv,env)==EIO);
+    logged("resume","posix_errno",-1,EIO);assert(logged_errno==EPERM && kill_calls==1 && continue_calls==1);
     return 0;
 }
 '''

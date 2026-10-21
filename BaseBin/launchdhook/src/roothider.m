@@ -10,6 +10,7 @@
 #include <libjailbreak/libjailbreak.h>
 #include <libjailbreak/roothider.h>
 #include <libjailbreak/credential_types.h>
+#include <libjailbreak/roothide_stage.h>
 
 extern int proc_get_pidversion(pid_t pid);
 extern int jbdSpawnPatchChildDeferred(int pid, bool resume);
@@ -363,20 +364,56 @@ static int spawn_credential_helper(pid_t *pidp, const char *path, struct _posix_
     // application or calling back into this already busy credential server.
     posix_spawnattr_t *attr = &desc->attrp;
     short flags = 0;
-    int r = posix_spawnattr_getflags(attr, &flags);
-    if (!r) r = posix_spawnattr_setflags(attr, flags | POSIX_SPAWN_START_SUSPENDED);
-    if (r) return r;
     pid_t child = 0;
+    int version = 0;
+    int raw = 0, observedErrno = 0;
+    const char *phase = "getflags";
+    const char *domain = "posix_status";
+    int r = posix_spawnattr_getflags(attr, &flags);
+    if (!r) {
+        phase = "setflags";
+        r = posix_spawnattr_setflags(attr, flags | POSIX_SPAWN_START_SUSPENDED);
+    }
+    if (r) { raw = r; goto report; }
+    phase = "spawn";
     r = __posix_spawn_orig_wrapper(&child, path, desc, argv, envp);
     posix_spawnattr_setflags(attr, flags);
-    if (r) return r;
+    if (r) { raw = r; goto report; }
     if (pidp) *pidp = child;
-    if (child <= 1) return EIO;
-    int version = proc_get_pidversion(child);
-    if (version <= 0 || proc_patch_csflags(child) || roothide_patch_proc_ex(child, true)) r = EIO;
-    if (!r && !(flags & POSIX_SPAWN_START_SUSPENDED) &&
-        (proc_get_pidversion(child) != version || kill(child, SIGCONT))) r = EIO;
+    phase = "child_pid";
+    domain = "validation";
+    if (child <= 1) { raw = child; r = EIO; goto report; }
+    phase = "pidversion";
+    raw = version = proc_get_pidversion(child);
+    if (version <= 0) { r = EIO; goto cleanup; }
+    phase = "csflags";
+    domain = "patch_status";
+    raw = proc_patch_csflags(child);
+    if (raw) { r = EIO; goto cleanup; }
+    phase = "dyld_patch";
+    raw = roothide_patch_proc_ex(child, true);
+    if (raw) { r = EIO; goto cleanup; }
+    if (!(flags & POSIX_SPAWN_START_SUSPENDED)) {
+        phase = "resume_pidversion";
+        domain = "validation";
+        raw = proc_get_pidversion(child);
+        if (raw != version) { r = EIO; goto cleanup; }
+        phase = "resume";
+        domain = "posix_errno";
+        raw = kill(child, SIGCONT);
+        if (raw) { observedErrno = errno; r = EIO; goto cleanup; }
+    }
+    phase = "complete";
+    domain = "none";
+    raw = 0;
+cleanup:
     if (r && version > 0 && proc_get_pidversion(child) == version) kill(child, SIGKILL);
+report:
+    // These local launchd failures never reach jailbreakd's normal spawn log.
+    // Keep original return/cleanup semantics; EIO alone loses the failing step.
+    roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+        "credential.helper.prepare phase=%s helper_pid=%d domain=%s raw=%d observed_errno=%d result=%d suspended=%d",
+        phase, child, domain, raw, observedErrno, r, !!(flags & POSIX_SPAWN_START_SUSPENDED));
     return r;
 }
 

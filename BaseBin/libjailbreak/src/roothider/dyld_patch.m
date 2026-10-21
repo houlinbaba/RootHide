@@ -483,12 +483,16 @@ int hook_dyld_entry(mach_port_t task, uint64_t old_header, uint64_t old_entry, u
     kern_return_t kr = vm_protect(task, (vm_address_t)old_header, sizeof(padding), false, VM_PROT_READ|VM_PROT_WRITE|VM_PROT_COPY);
     if(kr != KERN_SUCCESS) {
         JBLogError("vm_protect header failed: %d,%s", kr, mach_error_string(kr));
+        roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+            "dyld.trampoline.failed phase=header_protect domain=mach raw=%d", kr);
         return -1;
     }
 
     kr = vm_write(task, (vm_address_t)old_header, (vm_offset_t)&padding, sizeof(padding));
     if(kr != KERN_SUCCESS) {
         JBLogError("vm_write header failed: %d,%s", kr, mach_error_string(kr));
+        roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+            "dyld.trampoline.failed phase=header_write domain=mach raw=%d", kr);
         return -1;
     }
 
@@ -516,18 +520,24 @@ br   x0
     kr = vm_protect(task, (vm_address_t)old_entry, sizeof(codes), false, VM_PROT_READ|VM_PROT_WRITE|VM_PROT_COPY);
     if(kr != KERN_SUCCESS) {
         JBLogError("vm_protect rw(cpoy) failed: %d,%s", kr, mach_error_string(kr));
+        roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+            "dyld.trampoline.failed phase=entry_protect domain=mach raw=%d", kr);
         return -1;
     }
 
     kr = vm_write(task, (vm_address_t)old_entry, (vm_offset_t)codes, sizeof(codes));
     if(kr != KERN_SUCCESS) {
         JBLogError("vm_write failed: %d,%s", kr, mach_error_string(kr));
+        roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+            "dyld.trampoline.failed phase=entry_write domain=mach raw=%d", kr);
         return -1;
     }
 
     kr = vm_protect(task, (vm_address_t)old_entry, sizeof(void*), false, VM_PROT_READ|VM_PROT_EXECUTE);
     if(kr != KERN_SUCCESS) {
         JBLogError("vm_protect rx failed: %d,%s", kr, mach_error_string(kr));
+        roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+            "dyld.trampoline.failed phase=entry_execute domain=mach raw=%d", kr);
         return -1;
     }
 
@@ -614,8 +624,11 @@ br   x17
 int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
 {
     int ret = 0;
+    const char *phase = "load_dyld";
+    const char *domain = "validation";
+    int detail = -1;
 
-    kern_return_t kr;
+    kern_return_t kr = KERN_SUCCESS;
     task_port_t task = MACH_PORT_NULL;
     vm_address_t  remoteLoadAddress = 0;
 
@@ -630,11 +643,16 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
 
     if(stockDyldInfo == NULL || patchedDyldInfo == NULL) {
         JBLogError("load dyld failed");
+        roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+            "dyld.patch.failed target_pid=%d phase=%s domain=%s raw=%d", pid, phase, domain, detail);
         return -1;
     }
 
+    phase = "task_for_pid";
+    domain = "mach";
     kr = task_for_pid(mach_task_self(), pid, &task);
     if(kr != KERN_SUCCESS || !MACH_PORT_VALID(task)) {
+        if (kr == KERN_SUCCESS) { domain = "validation"; phase = "task_port"; }
         JBLogError("task_for_pid failed: %x,%s task=%x", kr, mach_error_string(kr), task);
         goto failed;
     }
@@ -643,6 +661,7 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
 
     task_dyld_info_data_t dyldInfo={0};
     uint32_t count = TASK_DYLD_INFO_COUNT;
+    phase = "task_info";
     kr = task_info(task, TASK_DYLD_INFO, (task_info_t)&dyldInfo, &count);
     if(kr != KERN_SUCCESS) {
     	JBLogError("task_info failed: %d,%s", kr, mach_error_string(kr));
@@ -654,6 +673,7 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
     JBLogDebug("default dyld=%p entry=%p", (void*)dyld_address, (void*)dyld_entry);
 
     vm_prot_t cur_prot=0, max_prot=0;
+    phase = "vm_remap";
     kr = vm_remap(task, &remoteLoadAddress, patchedDyldInfo->vmSpaceSize, 0, VM_FLAGS_ANYWHERE, mach_task_self(), (mach_vm_address_t)patchedDyldInfo->imageAddress, true, &cur_prot, &max_prot, VM_INHERIT_COPY);
     if(kr != KERN_SUCCESS) {
         JBLogError("vm_remap %d,%s", kr, mach_error_string(kr));
@@ -662,11 +682,14 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
 
     JBLogDebug("remap dyld=%p prot=%x/%x", remoteLoadAddress, cur_prot, max_prot);
 
+    phase = "proc_find";
+    domain = "validation";
     uint64_t bsd_proc = proc_find(pid);
     if(!bsd_proc) {
         JBLogError("proc_find %d failed", pid);
         goto failed;
     }
+    phase = "proc_task";
     uint64_t mach_task = proc_task(bsd_proc);
     if(!mach_task) {
         JBLogError("proc_task %d failed", pid);
@@ -691,17 +714,24 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
 
         cs_allow_invalid(bsd_proc, false);
 
-        if(hook_dyld_function(task, loadDyldCache_old, loadDyldCache_new, loadDyldCache_orig) != 0) {
+        phase = "spinlock_hook";
+        domain = "patch_status";
+        detail = hook_dyld_function(task, loadDyldCache_old, loadDyldCache_new, loadDyldCache_orig);
+        if(detail != 0) {
             JBLogError("hook dyld loadDyldCache failed");
             goto failed;
         }
 
-        if(task_set_dyld_info(mach_task, dyld_address + stockDyldInfo->all_image_info_addr, stockDyldInfo->all_image_info_size) != 0) {
+        phase = "spinlock_metadata";
+        detail = task_set_dyld_info(mach_task, dyld_address + stockDyldInfo->all_image_info_addr, stockDyldInfo->all_image_info_size);
+        if(detail != 0) {
             JBLogError("task_set_dyld_info failed");
             goto failed;
         }
 
         //destroy macho header
+        phase = "spinlock_header_deallocate";
+        domain = "mach";
         kr = vm_deallocate(task, remoteLoadAddress, PAGE_SIZE);
         if(kr != KERN_SUCCESS) {
             JBLogError("vm_deallocate failed: %d,%s", kr, mach_error_string(kr));
@@ -717,12 +747,16 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
     
     thread_act_array_t allThreads=NULL;
     mach_msg_type_number_t threadCount = 0;
+    phase = "task_threads";
+    domain = "mach";
     kr = task_threads(task, &allThreads, &threadCount);
     if(kr != KERN_SUCCESS) {
         JBLogError("task_threads failed: %d,%s", kr, mach_error_string(kr));
         goto failed;
     }
     if(threadCount == 0) {
+        phase = "thread_count";
+        domain = "validation";
         JBLogError("no thread found");
         goto failed;
     }
@@ -733,6 +767,8 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
 
         arm_thread_state64_t threadState={0};
         mach_msg_type_number_t threadStateCount = ARM_THREAD_STATE64_COUNT;
+        phase = "thread_get_state";
+        domain = "mach";
         kr = thread_get_state(allThreads[i], ARM_THREAD_STATE64, (thread_state_t)&threadState, &threadStateCount);
         if(kr != KERN_SUCCESS) {
             JBLogError("thread_get_state %d,%s", kr, mach_error_string(kr));
@@ -760,7 +796,10 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
             if (__builtin_available(iOS 17.0, *)) {
                 if (getpid() == 1) {
                     cs_allow_invalid(bsd_proc, false);
+                    phase = "launchd_trampoline";
+                    domain = "patch_status";
                     int redirectResult = hook_dyld_entry(task, dyld_address, dyld_entry, (uint64_t)new_entry);
+                    detail = redirectResult;
                     roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
                         "dyld.entry.redirect caller=1 pid=%d mode=trampoline result=%d", pid, redirectResult);
                     if (redirectResult != 0) {
@@ -781,7 +820,10 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
 
                 cs_allow_invalid(bsd_proc, false);
 
-                if(hook_dyld_entry(task, dyld_address, dyld_entry, (uint64_t)new_entry) != 0) {
+                phase = "pac_trampoline";
+                domain = "patch_status";
+                detail = hook_dyld_entry(task, dyld_address, dyld_entry, (uint64_t)new_entry);
+                if(detail != 0) {
                     JBLogError("hook_dyld_entry failed");
                     goto reentry_end;
                 }
@@ -796,12 +838,15 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
 #endif
             __darwin_arm_thread_state64_set_pc_fptr(threadState, new_entry);
             roothide_stage_log("dyld.entry.redirect caller=%d pid=%d mode=thread_state", getpid(), pid);
+            phase = "thread_set_state";
+            domain = "mach";
             kr = thread_set_state(allThreads[i], ARM_THREAD_STATE64, (thread_state_t)&threadState, threadStateCount);
             if(kr != KERN_SUCCESS) {
                 JBLogError("thread_set_state failed: %d,%s", kr, mach_error_string(kr));
                 goto reentry_end;
             }
 
+            phase = "old_dyld_deallocate";
             kr = vm_deallocate(task, dyld_address, stockDyldInfo->vmSpaceSize);
             if(kr != KERN_SUCCESS) {
                 JBLogError("vm_deallocate old dyld failed: %d,%s", kr, mach_error_string(kr));
@@ -811,6 +856,8 @@ int proc_patch_dyld_internal(pid_t pid, bool spinlockFixOnly)
             reentry = true;
             break;
         }
+        phase = "entry_not_found";
+        domain = "validation";
     }
 
 reentry_end:
@@ -824,7 +871,10 @@ reentry_end:
         goto failed;
     }
 
-    if(task_set_dyld_info(mach_task, remoteLoadAddress + patchedDyldInfo->all_image_info_addr, patchedDyldInfo->all_image_info_size) != 0) {
+    phase = "metadata";
+    domain = "patch_status";
+    detail = task_set_dyld_info(mach_task, remoteLoadAddress + patchedDyldInfo->all_image_info_addr, patchedDyldInfo->all_image_info_size);
+    if(detail != 0) {
         JBLogError("task_set_dyld_info failed");
         goto failed;
     }
@@ -838,6 +888,11 @@ reentry_end:
     goto final;
 
 failed:
+    // Persist the first failed operation before cleanup can replace its status.
+    // A Mach code is a separate domain from a POSIX spawn status or errno.
+    roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+        "dyld.patch.failed target_pid=%d phase=%s domain=%s raw=%d", pid, phase, domain,
+        !strcmp(domain, "mach") ? kr : detail);
     ret = -1;
     if(remoteLoadAddress) {
         vm_deallocate(task, remoteLoadAddress, patchedDyldInfo->vmSpaceSize);

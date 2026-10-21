@@ -20,6 +20,10 @@ CLIENT = ROOT / 'BaseBin/libjailbreak/src'
 UI = ROOT / 'Application/Dopamine/UI'
 RUNTIME = ROOT / 'BaseBin/systemhook/src'
 DIAGNOSTIC_SOURCES = [
+    '.github/scripts/test_roothide_credentials.py',
+    '.github/scripts/test_dyld_entry_redirect.py',
+    'BaseBin/launchdhook/src/roothider.m',
+    'BaseBin/libjailbreak/src/roothider/dyld_patch.m',
     '.github/scripts/test_spawn_pid.py',
     '.github/scripts/test_runtime_identity.py',
     '.github/scripts/test_terminal_diagnostics.py',
