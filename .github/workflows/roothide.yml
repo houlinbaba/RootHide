@@ -22,7 +22,7 @@ on:
         default: false
         type: boolean
       settings_scroll_delivery:
-        description: Private settings timing and terminal diagnostics on c538 baseline
+        description: Public settings timing and terminal diagnostics on c538 baseline
         required: false
         default: false
         type: boolean
@@ -64,7 +64,7 @@ jobs:
         if: inputs.a17_firmware_delivery == true
         run: python3 .github/scripts/package_a17_firmware_test.py --preflight
 
-      - name: Check private settings scroll test scope before building
+      - name: Check public settings diagnostics scope before building
         if: inputs.settings_scroll_delivery == true
         run: python3 .github/scripts/package_settings_scroll_test.py --preflight
 
@@ -346,7 +346,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      # Default remains text only. Explicit private test deliveries do not
+      # Default remains text only. Explicit test deliveries do not
       # change unresolved findings or stable distribution eligibility.
       - name: Collect approved private A17 firmware test package
         if: success() && inputs.a17_firmware_delivery == true
@@ -361,11 +361,11 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      - name: Collect private settings diagnostics test package
+      - name: Collect public settings diagnostics test package
         if: success() && inputs.settings_scroll_delivery == true
         run: python3 .github/scripts/package_settings_scroll_test.py --output artifacts/settings-diagnostics-test
 
-      - name: Upload private settings diagnostics test package
+      - name: Upload public settings diagnostics test package
         if: success() && inputs.settings_scroll_delivery == true
         uses: actions/upload-artifact@v4
         with:

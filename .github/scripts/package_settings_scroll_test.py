@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect the approved private settings/terminal diagnostics test; never execute iOS code."""
+"""Collect the approved public settings/terminal diagnostics test; never execute iOS code."""
 import argparse
 import json
 import os
@@ -17,9 +17,10 @@ BASE = 'c5380e3da4a365a8669545f0217bab02d928ca99'
 RUNTIME_ANCHOR = BASE
 VERIFIED_UI = 'ad13a957b4ab3b6bb1fd1b6922bf1f98a1dd7eac'
 VERIFIED_TESTS = VERIFIED_UI
+VERIFIED_HARNESS = 'ca36ec6690530fd83405e671bcbf6296b08ea436'
 FIRMWARE_COMMIT = '28829475b7f00c3c881ed03602020d0907d84eac'
-REPOSITORY = 'kulinichx/RootHide-Dev'
-REF = 'refs/heads/codex/ios17-settings-scroll-20261020'
+REPOSITORY = 'kulinichx/RootHide'
+REF = 'refs/heads/codex/settings-diagnostics-public-20261021'
 SOURCE_PATHS = {
     'Application/Dopamine/UI/DOMainViewController.m',
     'Application/Dopamine/UI/Settings/DOSettingsController.m',
@@ -36,6 +37,7 @@ DELIVERY_PATHS = {
     '.github/workflows/roothide.yml',
     '.github/scripts/package_settings_scroll_test.py',
 }
+HARNESS_PATHS = {'.github/scripts/test_boomerang_sender.py'}
 
 
 def delivery_scope():
@@ -48,7 +50,7 @@ def delivery_scope():
             'settings scroll test repository/branch/actor/manual scope rejected')
     event = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text(encoding='utf-8'))
     require(event['repository']['full_name'] == REPOSITORY
-            and event['repository']['private'] is True, 'Unexpected private repository')
+            and event['repository']['private'] is False, 'Unexpected public repository')
     require(event['repository']['default_branch'] != REF.removeprefix('refs/heads/'),
             'Test delivery must use its dedicated branch')
     inputs = event['inputs']
@@ -64,17 +66,20 @@ def delivery_scope():
     require(head == os.environ['GITHUB_SHA'], 'Checkout does not match dispatched SHA')
     git('merge-base', '--is-ancestor', VERIFIED_UI, head)
     git('merge-base', '--is-ancestor', VERIFIED_TESTS, head)
+    git('merge-base', '--is-ancestor', VERIFIED_HARNESS, head)
     changed = set(git('diff', '--name-only', BASE, head).decode().splitlines())
-    require(changed == SOURCE_PATHS | DELIVERY_PATHS, 'Unexpected settings scroll test source delta')
-    for path in sorted(SOURCE_PATHS):
-        reference = VERIFIED_TESTS if path.endswith('.py') else VERIFIED_UI
+    require(changed == SOURCE_PATHS | HARNESS_PATHS | DELIVERY_PATHS,
+            'Unexpected settings scroll test source delta')
+    for path in sorted(SOURCE_PATHS | HARNESS_PATHS):
+        reference = VERIFIED_HARNESS if path in HARNESS_PATHS else (
+            VERIFIED_TESTS if path.endswith('.py') else VERIFIED_UI)
         require(git('rev-parse', head + ':' + path) == git('rev-parse', reference + ':' + path),
                 'Verified settings file changed: ' + path)
     trees = {}
     for label, revision in [('base', BASE), ('final', head)]:
         entries = git('ls-tree', '-rz', '--full-tree', revision).split(b'\0')
         entries = [e for e in entries if e and
-                   e.split(b'\t', 1)[1].decode() not in SOURCE_PATHS | DELIVERY_PATHS]
+                   e.split(b'\t', 1)[1].decode() not in SOURCE_PATHS | HARNESS_PATHS | DELIVERY_PATHS]
         trees[label] = digest(b'\0'.join(entries))
     require(trees['base'] == trees['final'], 'Backend/source/submodule objects changed')
     status = json.loads((ROOT / 'docs/review/candidate-status.json').read_text())
@@ -83,6 +88,7 @@ def delivery_scope():
     return {
         'runtime_anchor': RUNTIME_ANCHOR, 'source_baseline': BASE,
         'verified_ui_commit': VERIFIED_UI, 'verified_tests_commit': VERIFIED_TESTS,
+        'verified_harness_commit': VERIFIED_HARNESS,
         'verified_firmware_commit': FIRMWARE_COMMIT, 'final_commit': head,
         'repository': REPOSITORY, 'ref': REF, 'changed_paths': sorted(changed),
         'source_tree_excluding_settings_and_delivery': trees,
@@ -95,7 +101,7 @@ def delivery_scope():
             'Timing reports elapsed main-thread work in overlapping categories, not FPS or GPU time. Terminal EOF may produce no crash report.',
             'F1: timeout/late server work ownership remains unresolved.',
             'F3: bounded userspace reboot handoff remains unresolved.',
-            'This is a private diagnostics candidate, not a stable release.',
+            'This public diagnostics candidate is approved for feedback testing only; stable release acceptance remains unresolved.',
         ],
     }
 
@@ -161,6 +167,7 @@ def verify(directory):
     manifest = json.loads((directory / 'package-manifest.json').read_text(encoding='utf-8'))
     require(manifest['runtime_anchor'] == RUNTIME_ANCHOR and manifest['source_baseline'] == BASE
             and manifest['verified_ui_commit'] == VERIFIED_UI and manifest['verified_tests_commit'] == VERIFIED_TESTS
+            and manifest['verified_harness_commit'] == VERIFIED_HARNESS
             and manifest['verified_firmware_commit'] == FIRMWARE_COMMIT
             and manifest['repository'] == REPOSITORY and manifest['ref'] == REF
             and manifest['classification'] == 'settings-diagnostics-test'
