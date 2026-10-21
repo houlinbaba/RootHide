@@ -19,9 +19,16 @@ SITES = {
     'BaseBin/systemhook/src/roothider_main.c': 1,
     'BaseBin/libjailbreak/src/roothider/common.m': 1,
 }
+# The common.m wrapper has this existing diagnostic between its NULL fallback
+# and spawn call. Allow only this exact statement, not arbitrary intervening code.
+SPAWN_BEGIN_LOG = (
+    'roothide_stage_log("posix_spawn.begin path=%s patch_child=%d resume=%d", '
+    'path, need_patch_child, should_resume);'
+)
 PATTERN = re.compile(
     r'pid_t pidval = 0;\s*if \(!pidp\) pidp = &pidval;\s*'
-    r'int ret = (?:__posix_spawn_orig_wrapper|__posix_spawn_orig|posix_spawn)'
+    + r'(?:' + re.escape(SPAWN_BEGIN_LOG) + r'\s*)?'
+    + r'int ret = (?:__posix_spawn_orig_wrapper|__posix_spawn_orig|posix_spawn)'
     r'\(pidp,[^;]+;\s*pid_t pid = [^;]+;'
 )
 PREFIX = r'''
@@ -116,7 +123,9 @@ def main():
         for block in blocks:
             if 'pid_t pid = (ret == 0) ? *pidp : 0;' not in block:
                 raise SystemExit(f'Missing success-only PID read: {name}')
-        snippets.extend(blocks)
+        # PID behavior is exercised below; the diagnostic itself is outside this
+        # harness and its production arguments are intentionally not stubbed.
+        snippets.extend(block.replace(SPAWN_BEGIN_LOG, '') for block in blocks)
     body = '\n'.join(f'static int wrapper{i}(pid_t *pidp) {{\n{block}\nobserved_pid = pid; return ret;\n}}' for i, block in enumerate(snippets))
     source = PREFIX + body + SUFFIX
     compiler = shlex.split(os.environ.get('CC', 'cc'))
