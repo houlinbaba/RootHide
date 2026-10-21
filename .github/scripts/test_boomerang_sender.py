@@ -269,7 +269,7 @@ DARWIN = r'''
 #include <spawn.h>
 #include <pthread.h>
 #include <unistd.h>
-static int failure, mode, sem_creates;
+static int failure, mode, sem_creates, timeout_polls;
 static dispatch_source_t current_source;
 static dispatch_semaphore_t test_drained;
 static dispatch_semaphore_t fake_sem(long n) {
@@ -288,7 +288,15 @@ static dispatch_source_t fake_source(dispatch_source_type_t type, uintptr_t port
 }
 #define dispatch_source_create fake_source
 static dispatch_time_t short_time(dispatch_time_t now, int64_t delta) {
+    assert(now == DISPATCH_TIME_NOW);
     assert(delta == 100 * NSEC_PER_MSEC || delta == NSEC_PER_SEC);
+    // No DONE is ever sent in mode 2. Exercise all 300 production polls
+    // with expired deadlines instead of accumulating 300 host timer sleeps.
+    // Real timeout scheduling is checked once below; cancellation stays real.
+    if (mode == 2 && delta == 100 * NSEC_PER_MSEC) {
+        timeout_polls++;
+        return DISPATCH_TIME_NOW;
+    }
     return dispatch_time(now, delta == NSEC_PER_SEC ? 100 * NSEC_PER_MSEC : 10 * NSEC_PER_MSEC);
 }
 #define dispatch_time(now, delta) short_time(now, delta)
@@ -314,7 +322,7 @@ static int jbserver_received_boomerang_xpc_message(int *server, xpc_object_t msg
 
 DARWIN_CASES = r'''
 static void reset(int fail, int next_mode) {
-    failure = fail; mode = next_mode; sem_creates = 0; current_source = NULL;
+    failure = fail; mode = next_mode; sem_creates = timeout_polls = 0; current_source = NULL;
     ports = attributes = kills = waits = spawn_calls = published = child_reaped = child_killed = 0;
     test_drained = (dispatch_semaphore_create)(0);
 }
@@ -332,6 +340,14 @@ int main(int argc, char **argv) {
     // One scenario per process: each owns its dispatch objects, mutable mock
     // state and watchdog budget, including sanitizer/runtime initialization.
     reset(fail, next_mode);
+    if (next_mode == 2) {
+        // Keep one genuine blocking libdispatch timeout, independent of the
+        // poll-loop clock. A broken wait still hits the process watchdog.
+        assert(dispatch_semaphore_wait(test_drained,
+            (dispatch_time)(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC)) != 0);
+        puts("PASS: real libdispatch no-signal timeout before 300 expired-deadline polls");
+        fflush(stdout);
+    }
     int result = boomerang_stashPrimitives();
     if (fail && fail <= 6) {
         assert(result && !ports && !attributes);
@@ -341,7 +357,8 @@ int main(int argc, char **argv) {
         drained();
         if (fail) assert(result && !published);
         else if (next_mode == 1) assert(result == EIO && !kills);
-        else if (next_mode == 2) assert(result == ETIMEDOUT && kills == 1);
+        else if (next_mode == 2) assert(result == ETIMEDOUT && kills == 1 &&
+                                       timeout_polls == 300 && waits == 302 && !published);
         else if (next_mode == 3) assert(result == ETIMEDOUT && !published);
         else assert(!result && published == 1 && !kills);
     }
@@ -356,7 +373,7 @@ typedef void *dispatch_semaphore_t, *dispatch_source_t;
 #define DISPATCH_TIME_NOW 0
 #define NSEC_PER_MSEC 1000000LL
 #define NSEC_PER_SEC 1000000000LL
-static int failure, mode, sem_creates;
+static int failure, mode, sem_creates, timeout_polls;
 static int ports, attributes, kills, waits, spawn_calls, published, child_reaped, child_killed;
 static dispatch_source_t current_source;
 static dispatch_semaphore_t test_drained;
@@ -381,7 +398,13 @@ int main(void) {
         drained();
         assert(sem_creates == 2);
     }
-    puts("PASS: Darwin harness wrappers inject sender failures while preserving its own semaphore and two-second drain deadline");
+    reset(0, 2);
+    for (int i = 0; i < 300; i++)
+        assert(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC) == DISPATCH_TIME_NOW);
+    assert(timeout_polls == 300);
+    assert(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC) == 100 * NSEC_PER_MSEC);
+    drained();
+    puts("PASS: Darwin wrappers preserve failure injection, 300 expired polls, real cancellation and the two-second drain deadline");
     return 0;
 }
 '''
