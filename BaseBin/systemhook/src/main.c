@@ -331,7 +331,10 @@ if (msSafeModeValue) {
 
 int __posix_spawn_hook(pid_t *restrict pid, const char *restrict path, struct _posix_spawn_args_desc *desc, char *const argv[restrict], char * const envp[restrict])
 {
-	return roothide_systemhook___posix_spawn_prehook(pid, path, desc, argv, envp, (void *)roothide_systemhook___posix_spawn_posthook, trust_executable_recurse_no_arch, jbclient_platform_set_process_debugged, jbclient_jbsettings_get_double("jetsamMultiplier"));
+	RH_TERMINAL_DIAGNOSTIC(getprogname(), "spawn.begin", path, 0, 0, 0);
+	int result = roothide_systemhook___posix_spawn_prehook(pid, path, desc, argv, envp, (void *)roothide_systemhook___posix_spawn_posthook, trust_executable_recurse_no_arch, jbclient_platform_set_process_debugged, jbclient_jbsettings_get_double("jetsamMultiplier"));
+	RH_TERMINAL_DIAGNOSTIC(getprogname(), "spawn.end", path, result, 0, errno);
+	return result;
 }
 
 int __posix_spawn_hook_with_filter(pid_t *restrict pid, const char *restrict path, char *const argv[restrict], char * const envp[restrict], struct _posix_spawn_args_desc *desc, int *ret)
@@ -342,7 +345,10 @@ int __posix_spawn_hook_with_filter(pid_t *restrict pid, const char *restrict pat
 
 int __execve_hook(const char *path, char *const argv[], char *const envp[])
 {
-	return roothide_systemhook___execve_prehook(path, argv, envp, (void *)roothide_systemhook___execve_posthook, trust_executable_recurse_no_arch);
+	RH_TERMINAL_DIAGNOSTIC(getprogname(), "exec.begin", path, 0, 0, 0);
+	int result = roothide_systemhook___execve_prehook(path, argv, envp, (void *)roothide_systemhook___execve_posthook, trust_executable_recurse_no_arch);
+	RH_TERMINAL_DIAGNOSTIC(getprogname(), "exec.returned", path, result, 0, errno);
+	return result;
 }
 
 const struct mach_header_64 *get_dyld_mach_header(void)

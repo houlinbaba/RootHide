@@ -1,23 +1,45 @@
 #!/usr/bin/env python3
 """Collect the approved public settings/terminal diagnostics test; never execute iOS code."""
 import argparse
+import io
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import tarfile
 import zipfile
 
 from package_single_person_research import (
     CORE, RECEIPTS, ROOT, digest, git, inspect_package, require, uuid_map, write_json,
 )
 
-RECEIPTS = (*RECEIPTS, 'settings-scroll-tests.json', 'settings-timing-tests.json')
+RECEIPTS = (*RECEIPTS, 'settings-scroll-tests.json', 'settings-timing-tests.json', 'terminal-diagnostics-tests.json')
 BASE = 'c5380e3da4a365a8669545f0217bab02d928ca99'
 RUNTIME_ANCHOR = BASE
 VERIFIED_UI = 'ad13a957b4ab3b6bb1fd1b6922bf1f98a1dd7eac'
 VERIFIED_TESTS = VERIFIED_UI
 VERIFIED_HARNESS = 'ca36ec6690530fd83405e671bcbf6296b08ea436'
+VERIFIED_TERMINAL_BASE = '6cef532e683637892e59746a15e6a352527c7813'
+# Exact diagnostic blobs are pinned below; the rest of the runtime and all
+# submodules must still match the firmware baseline. No floating source pin.
+TERMINAL_SOURCE_SHA256 = {
+    ".github/scripts/test_terminal_diagnostics.py": "47baf8f23ce9170216fad25e3014d6cc11a71cce7c5891d2b2175ab0cf97db8a",
+    ".github/scripts/test_roothide_diagnostic_export.py": "e2f2e854a80c9dd1c742b57d9df87ed8d90bb60fa8b16515f515a37df85638e3",
+    "Application/Dopamine/UI/DOUIManager.m": "02a53d8b5c84e7e3e622de25fef459cd2ecef214e3892ca0ba786332105d0974",
+    "Application/Dopamine/UI/DODiagnosticLogQuery.h": "f9e871ec1107a14aee2843808e17e62bb5f5439419a675df3df4aadf5402e91e",
+    "BaseBin/launchdhook/src/jbserver/jbdomain_dopamine.c": "fc9af7d3304b8c3e7cbfd09733346a7f669cc7b211965d299411fdf2b6e723f9",
+    "BaseBin/libjailbreak/src/jbclient_xpc.c": "365c2677a824c83c1220f879fbc8d7cb6b785e2516429521961c1f7243d6a025",
+    "BaseBin/libjailbreak/src/jbclient_xpc.h": "3644eb8e75e2138799d7276dc514838a51eaa7a88afd708000de67c6384eeee0",
+    "BaseBin/libjailbreak/src/jbserver_domains.h": "39587d38c0aa35fc6bc115e017d9b4d30043ff7004ac57038511b1411fbd31c9",
+    "BaseBin/libjailbreak/src/diagnostic_log.h": "9762deb53b4a032303aba52219a5d0ba91ad031026d23f23c7f5e409e2edf503",
+    "BaseBin/systemhook/Makefile": "724cb311031ac595f524df4b6b417f1ce2fc964becf7e0a2da4d3481ab7f46ea",
+    "BaseBin/systemhook/src/common/runtime_diagnostics.c": "71351cc8212a1f06ace32de327ad3dba6711a4b94ff30cd8859cf5befdd6936e",
+    "BaseBin/systemhook/src/common/runtime_diagnostics.h": "1e0ee6ec98beb071ec19ea123f3d3ca7aea0412daf1863fb7c86c416d785fed0",
+    "BaseBin/systemhook/src/main.c": "8ab1055c99ccd2471182c28cea93f11d5a963079a2b1a2b4b02026cd1b597dd0",
+    "BaseBin/systemhook/src/roothider_main.c": "e37c8064605be3b958000b4b51ea791b9dd67a82d60548bf35b6994390eb14ae"
+}
+TERMINAL_PATHS = set(TERMINAL_SOURCE_SHA256)
 FIRMWARE_COMMIT = '28829475b7f00c3c881ed03602020d0907d84eac'
 REPOSITORY = 'kulinichx/RootHide'
 REF = 'refs/heads/codex/settings-diagnostics-public-20261021'
@@ -67,10 +89,15 @@ def delivery_scope():
     git('merge-base', '--is-ancestor', VERIFIED_UI, head)
     git('merge-base', '--is-ancestor', VERIFIED_TESTS, head)
     git('merge-base', '--is-ancestor', VERIFIED_HARNESS, head)
+    git('merge-base', '--is-ancestor', VERIFIED_TERMINAL_BASE, head)
     changed = set(git('diff', '--name-only', BASE, head).decode().splitlines())
-    require(changed == SOURCE_PATHS | HARNESS_PATHS | DELIVERY_PATHS,
+    require(changed == SOURCE_PATHS | TERMINAL_PATHS | HARNESS_PATHS | DELIVERY_PATHS,
             'Unexpected settings scroll test source delta')
-    for path in sorted(SOURCE_PATHS | HARNESS_PATHS):
+    for path in sorted(SOURCE_PATHS | TERMINAL_PATHS | HARNESS_PATHS):
+        if path in TERMINAL_PATHS:
+            require(digest(git('show', head + ':' + path)) == TERMINAL_SOURCE_SHA256[path],
+                    'Pinned terminal diagnostic source changed: ' + path)
+            continue
         reference = VERIFIED_HARNESS if path in HARNESS_PATHS else (
             VERIFIED_TESTS if path.endswith('.py') else VERIFIED_UI)
         require(git('rev-parse', head + ':' + path) == git('rev-parse', reference + ':' + path),
@@ -79,9 +106,9 @@ def delivery_scope():
     for label, revision in [('base', BASE), ('final', head)]:
         entries = git('ls-tree', '-rz', '--full-tree', revision).split(b'\0')
         entries = [e for e in entries if e and
-                   e.split(b'\t', 1)[1].decode() not in SOURCE_PATHS | HARNESS_PATHS | DELIVERY_PATHS]
+                   e.split(b'\t', 1)[1].decode() not in SOURCE_PATHS | TERMINAL_PATHS | HARNESS_PATHS | DELIVERY_PATHS]
         trees[label] = digest(b'\0'.join(entries))
-    require(trees['base'] == trees['final'], 'Backend/source/submodule objects changed')
+    require(trees['base'] == trees['final'], 'Objects outside pinned diagnostics/delivery changed')
     status = json.loads((ROOT / 'docs/review/candidate-status.json').read_text())
     require(status['distributable'] is False and status['classification'] == 'compile-research'
             and status['F1'] == status['F3'] == 'FAIL', 'Unresolved findings changed')
@@ -89,15 +116,19 @@ def delivery_scope():
         'runtime_anchor': RUNTIME_ANCHOR, 'source_baseline': BASE,
         'verified_ui_commit': VERIFIED_UI, 'verified_tests_commit': VERIFIED_TESTS,
         'verified_harness_commit': VERIFIED_HARNESS,
+        'terminal_diagnostic_base': VERIFIED_TERMINAL_BASE,
+        'terminal_diagnostic_source_sha256': TERMINAL_SOURCE_SHA256,
         'verified_firmware_commit': FIRMWARE_COMMIT, 'final_commit': head,
         'repository': REPOSITORY, 'ref': REF, 'changed_paths': sorted(changed),
-        'source_tree_excluding_settings_and_delivery': trees,
+        'source_tree_excluding_pinned_diagnostics_and_delivery': trees,
         'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
         'run_url': 'https://github.com/' + REPOSITORY + '/actions/runs/' + os.environ['GITHUB_RUN_ID'],
-        'classification': 'settings-diagnostics-test', 'distributable': False,
+        'classification': 'terminal-session-diagnostics-test', 'distributable': False,
         'F1': 'FAIL', 'F3': 'FAIL', 'device_acceptance': False,
         'known_limitations': [
-            'Timing and terminal diagnostics only; no device performance or terminal fix is claimed. Firmware/runtime are unchanged from c5380e3.',
+            'Bounded terminal startup/spawn/exec tracing and fixed read-only log descriptors only; no terminal fix is claimed. Firmware and runtime outside the pinned diagnostic paths match c5380e3.',
+            'Terminal logging is best effort. No child exit-status hook is installed; successful spawn does not establish a working terminal session.',
+            'Five-second App timeout abandons late results but cannot cancel synchronous service work. One outstanding diagnostic worker is retained until return.',
             'Timing reports elapsed main-thread work in overlapping categories, not FPS or GPU time. Terminal EOF may produce no crash report.',
             'F1: timeout/late server work ownership remains unresolved.',
             'F3: bounded userspace reboot handoff remains unresolved.',
@@ -130,6 +161,11 @@ def collect(output):
     with zipfile.ZipFile(tipa) as archive:
         require(scope['final_commit'].encode() in archive.read('Payload/Dopamine.app/Dopamine'),
                 'App does not embed this final commit')
+        with tarfile.open(fileobj=io.BytesIO(archive.read('Payload/Dopamine.app/basebin.tar'))) as basebin:
+            members = {m.name.removeprefix('./'): m for m in basebin.getmembers()}
+            trace = basebin.extractfile(members['basebin/systemhook.dylib']).read()
+            require(b'terminal=%s event=%s target=%s' in trace,
+                    'Terminal diagnostic build flag was not enabled')
     for receipt, key in [('runtime-identity-tests.json', 'pass'),
                          ('privilege-first-failure-tests.json', 'acceptance_pass')]:
         result = json.loads((ROOT / 'artifacts' / receipt).read_text())
@@ -148,8 +184,16 @@ def collect(output):
     for path, expected in timing['source_sha256'].items():
         require(digest((ROOT / 'Application/Dopamine/UI' / path).read_bytes()) == expected,
                 'Timing receipt does not match source: ' + path)
+    terminal = json.loads((ROOT / 'artifacts/terminal-diagnostics-tests.json').read_text())
+    require(terminal['pass'] is True and terminal['device_terminal_verified'] is False,
+            'Terminal diagnostic regression receipt did not pass')
+    require(terminal['source_sha256'] == TERMINAL_SOURCE_SHA256,
+            'Terminal diagnostic test source list or hashes differ from the pinned sources')
+    for path, expected in terminal['source_sha256'].items():
+        require(digest((ROOT / path).read_bytes()) == expected,
+                'Terminal diagnostic receipt does not match source: ' + path)
     output.mkdir(parents=True)
-    name = 'Dopamine_3.0.7-' + scope['final_commit'][:7] + '_Settings-diagnostics-test.tipa'
+    name = 'Dopamine_3.0.7-' + scope['final_commit'][:7] + '_Terminal-session-diagnostics-test.tipa'
     shutil.copyfile(tipa, output / name)
     require((output / name).read_bytes() == tipa.read_bytes(), 'Package copy mismatch')
     for receipt in RECEIPTS:
@@ -168,14 +212,16 @@ def verify(directory):
     require(manifest['runtime_anchor'] == RUNTIME_ANCHOR and manifest['source_baseline'] == BASE
             and manifest['verified_ui_commit'] == VERIFIED_UI and manifest['verified_tests_commit'] == VERIFIED_TESTS
             and manifest['verified_harness_commit'] == VERIFIED_HARNESS
+            and manifest['terminal_diagnostic_base'] == VERIFIED_TERMINAL_BASE
+            and manifest['terminal_diagnostic_source_sha256'] == TERMINAL_SOURCE_SHA256
             and manifest['verified_firmware_commit'] == FIRMWARE_COMMIT
             and manifest['repository'] == REPOSITORY and manifest['ref'] == REF
-            and manifest['classification'] == 'settings-diagnostics-test'
+            and manifest['classification'] == 'terminal-session-diagnostics-test'
             and manifest['distributable'] is False and manifest['device_acceptance'] is False
             and manifest['F1'] == manifest['F3'] == 'FAIL', 'Group test boundary mismatch')
     package = manifest['package']
     require(package['name'] == 'Dopamine_3.0.7-' + manifest['final_commit'][:7]
-            + '_Settings-diagnostics-test.tipa', 'Unexpected package filename')
+            + '_Terminal-session-diagnostics-test.tipa', 'Unexpected package filename')
     path = directory / package['name']
     require(path.stat().st_size == package['size'] and digest(path.read_bytes()) == package['sha256'],
             'Downloaded package hash/size mismatch')
@@ -200,7 +246,7 @@ def main():
         scope = delivery_scope()
         (ROOT / 'artifacts').mkdir(exist_ok=True)
         write_json(ROOT / 'artifacts/settings-scroll-source-proof.json', scope)
-        print('Approved settings diagnostics scope and unchanged firmware/runtime outside UI diagnostics verified.')
+        print('Approved terminal diagnostics source pins and unchanged firmware/runtime outside pinned diagnostics verified.')
     elif args.output:
         collect(args.output)
     else:

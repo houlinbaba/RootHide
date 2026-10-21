@@ -8,6 +8,8 @@
 #import "DOUIManager.h"
 #import "DORootHideDiagnostics.h"
 #import "DORuntimeIdentityQuery.h"
+#import "DODiagnosticLogQuery.h"
+#import <libjailbreak/jbclient_xpc.h>
 #import <libjailbreak/info.h>
 #import <libjailbreak/roothide_stage.h>
 #import "DOEnvironmentManager.h"
@@ -30,6 +32,10 @@ static dispatch_queue_t DOFileDiagnosticsQueue(void)
     });
     return queue;
 }
+
+@interface DOUIManager ()
+- (void)presentRootHideDiagnosticReport:(NSString *)report fromView:(UIView *)sourceView;
+@end
 
 @implementation DOUIManager
 
@@ -303,6 +309,25 @@ static dispatch_queue_t DOFileDiagnosticsQueue(void)
         @"/Library/Logs/CrashReporter", @"/var/root/Library/Logs/CrashReporter"];
     dispatch_async(DOFileDiagnosticsQueue(), ^{
         NSString *report = DORootHideDiagnosticReport(header, logs, crashDirectories, root, [NSDate date]);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!root.length) {
+                [self presentRootHideDiagnosticReport:report fromView:sourceView];
+                return;
+            }
+            BOOL started = DODiagnosticLogQueryStart(5.0, ^int(uint64_t selector, int *fd) {
+                return jbclient_dopamine_diagnostic_log_fd(selector, fd);
+            }, ^(NSString *serviceLogs) {
+                [self presentRootHideDiagnosticReport:[report stringByAppendingString:serviceLogs] fromView:sourceView];
+            });
+            if (!started) [self presentRootHideDiagnosticReport:[report stringByAppendingString:
+                @"\n\nService log collection busy after a previous request. Local logs retained.\n"] fromView:sourceView];
+        });
+    });
+}
+
+- (void)presentRootHideDiagnosticReport:(NSString *)report fromView:(UIView *)sourceView
+{
+    dispatch_async(DOFileDiagnosticsQueue(), ^{
         NSString *directory = [NSTemporaryDirectory() stringByAppendingPathComponent:[@"RootHideDiagnostics-" stringByAppendingString:NSUUID.UUID.UUIDString]];
         NSString *path = [directory stringByAppendingPathComponent:@"RootHide-diagnostics.txt"];
         NSError *error = nil;

@@ -154,10 +154,16 @@ def main():
     export = extract(source, '- (void)shareRootHideStageLogFromView:')
     assert 'Dopamine-systemhook-init.log' in export
     assert export.index('dispatch_async(DOFileDiagnosticsQueue()') < export.index('DORootHideDiagnosticReport(')
-    assert 'dispatch_get_main_queue' in export and 'completionWithItemsHandler' in export
-    assert 'fileURLWithPath:path' in export and '_rootHideExportInProgress' in export
-    for forbidden in ('runAsRoot', 'runUnsandboxed', 'isJailbroken', 'jailbrokenVersion', 'HealthReport', 'jbclient_'):
-        assert forbidden not in export, f'export must not wait for services: {forbidden}'
+    presentation = extract(source[source.index('@implementation DOUIManager'):], '- (void)presentRootHideDiagnosticReport:')
+    assert 'dispatch_get_main_queue' in export and 'completionWithItemsHandler' in presentation
+    assert 'fileURLWithPath:path' in presentation and '_rootHideExportInProgress' in export
+    assert 'dispatch_async(DOFileDiagnosticsQueue()' in presentation
+    assert 'DODiagnosticLogQueryStart(5.0' in export and 'if (!root.length)' in export
+    # Local collection/presentation remain service free. The optional query
+    # runs on a bounded-lifecycle worker, covered by test_terminal_diagnostics.
+    for forbidden in ('runAsRoot', 'runUnsandboxed', 'isJailbroken', 'jailbrokenVersion', 'HealthReport'):
+        assert forbidden not in export + presentation, f'export must not escalate: {forbidden}'
+    assert 'jbclient_' not in presentation
     assert 'test_roothide_diagnostic_export.py' in (ROOT / '.github/workflows/roothide.yml').read_text(encoding='utf-8')
     collector = (UI / 'DORootHideDiagnostics.h').read_text(encoding='utf-8')
     for process in ('newterm', 'newterm2', 'terminal', 'newtermloginhelper', 'login', 'zsh', 'bash', 'dash'):
@@ -181,7 +187,7 @@ def main():
         assert f'Dopamine-app-startup-{uid}.log' in collector and f'Dopamine-app-startup-{uid}.log' in export
     for language in ('en', 'zh-Hans'):
         assert '"RootHide_Log_Export_Failed"' in (ROOT / f'Application/Dopamine/{language}.lproj/Localizable.strings').read_text(encoding='utf-8')
-    print('PASS: background file collection, main-thread share, service-free export wiring', flush=True)
+    print('PASS: background local collection, optional descriptor query, main-thread share without escalation', flush=True)
     if args.check_only:
         print('Foundation harness NOT run (--check-only); Apple compilation and device export remain unverified.')
         return

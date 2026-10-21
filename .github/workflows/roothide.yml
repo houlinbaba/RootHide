@@ -22,7 +22,7 @@ on:
         default: false
         type: boolean
       settings_scroll_delivery:
-        description: Public settings timing and terminal diagnostics on c538 baseline
+        description: Public terminal session diagnostics with existing settings timing
         required: false
         default: false
         type: boolean
@@ -287,6 +287,12 @@ jobs:
       - name: App check-in grants and active session regressions
         run: python3 .github/scripts/test_app_checkin.py
 
+      - name: Read-only terminal diagnostics and export lifecycle regressions
+        run: python3 .github/scripts/test_terminal_diagnostics.py
+
+      - name: Spawn PID output and failure regressions
+        run: python3 .github/scripts/test_spawn_pid.py
+
       - name: Focused build P0-touched targets
         if: env.BUILD_MODE == 'focused'
         run: |
@@ -326,7 +332,7 @@ jobs:
           set -euo pipefail
           export CLANG_MODULE_CACHE_PATH="$RUNNER_TEMP/clang-module-cache"
           mkdir -p "$CLANG_MODULE_CACHE_PATH"
-          make -j"$(sysctl -n hw.logicalcpu)" NIGHTLY=1 RESEARCH_BUILD=1
+          make -j"$(sysctl -n hw.logicalcpu)" NIGHTLY=1 RESEARCH_BUILD=1 TERMINAL_DIAGNOSTICS=${{ inputs.settings_scroll_delivery == true && '1' || '0' }}
           python3 .github/scripts/check_basebin_signatures.py --tipa Application/Dopamine.tipa
 
           python3 .github/scripts/check_d1_apple_components.py --output artifacts/d1-apple-components.json
@@ -361,16 +367,16 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      - name: Collect public settings diagnostics test package
+      - name: Collect public terminal session diagnostics test package
         if: success() && inputs.settings_scroll_delivery == true
-        run: python3 .github/scripts/package_settings_scroll_test.py --output artifacts/settings-diagnostics-test
+        run: python3 .github/scripts/package_settings_scroll_test.py --output artifacts/terminal-session-diagnostics-test
 
-      - name: Upload public settings diagnostics test package
+      - name: Upload public terminal session diagnostics test package
         if: success() && inputs.settings_scroll_delivery == true
         uses: actions/upload-artifact@v4
         with:
-          name: settings-diagnostics-test-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/settings-diagnostics-test/
+          name: terminal-session-diagnostics-test-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/terminal-session-diagnostics-test/
           if-no-files-found: error
           retention-days: 3
 
@@ -384,6 +390,7 @@ jobs:
             artifacts/d1-apple-components.json
             artifacts/runtime-identity-tests.json
             artifacts/privilege-first-failure-tests.json
+            artifacts/terminal-diagnostics-tests.json
             docs/review/candidate-status.json
           if-no-files-found: error
           retention-days: 14

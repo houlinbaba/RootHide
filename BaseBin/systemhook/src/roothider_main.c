@@ -384,6 +384,7 @@ int roothide_systemhook___posix_spawn_posthook(pid_t *restrict pidp, const char 
 	if (!pidp) pidp = &pidval;
 	int ret = __posix_spawn_orig(pidp, path, desc, argv, envc);
 	pid_t pid = (ret == 0) ? *pidp : 0;
+	RH_TERMINAL_DIAGNOSTIC(getprogname(), "spawn.syscall", path, ret, pid, errno);
 
 	envbuf_free(envc);
 
@@ -407,6 +408,7 @@ int roothide_systemhook___posix_spawn_posthook(pid_t *restrict pidp, const char 
 					    kill(pid, SIGCONT) != 0) patchResult = -1;
 				}
 				if (patchResult != 0) {
+					RH_TERMINAL_DIAGNOSTIC(getprogname(), "spawn.patch.failed", path, patchResult, pid, errno);
 					/* -2 is a protocol mismatch: the old daemon may have resumed it. */
 					if (patchResult != -2 && originalPidVersion > 0 &&
 					    proc_get_pidversion(pid) == originalPidVersion) {

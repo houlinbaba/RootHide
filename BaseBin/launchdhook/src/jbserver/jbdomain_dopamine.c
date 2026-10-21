@@ -9,6 +9,7 @@
 #include <libjailbreak/runtime_identity.h>
 #include <stdatomic.h>
 #include <errno.h>
+#include <libjailbreak/diagnostic_log.h>
 
 static char *read_file_to_string(const char *path) {
     FILE *fp = fopen(path, "rb");
@@ -171,6 +172,22 @@ int dopamine_drop_root(audit_token_t *processToken)
 	return rh_failure_end(&scope, "legacy_identity", "legacy_status", 1, 1);
 }
 
+int dopamine_diagnostic_log_fd(uint64_t selector, int *outFD)
+{
+    if (!outFD) return EINVAL;
+    // The Dopamine-only domain authenticates the caller before this handler.
+    // First seven selectors use the real log directory, next seven the
+    // redirected bootstrap directory. Open only; reading is done by the App.
+    *outFD = -1;
+    if (selector >= RH_DIAGNOSTIC_LOG_COUNT * 2) return EINVAL;
+    const char *root = NULL;
+    if (selector >= RH_DIAGNOSTIC_LOG_COUNT) {
+        root = jbinfo(rootPath);
+        if (!root || root[0] != '/') return ENOENT;
+    }
+    return rh_diagnostic_log_open(root, selector % RH_DIAGNOSTIC_LOG_COUNT, outFD);
+}
+
 struct jbserver_domain gDopamineDomain = {
 	.permissionHandler = dopamine_domain_allowed,
 	.actions = {
@@ -196,6 +213,15 @@ struct jbserver_domain gDopamineDomain = {
 			.handler = dopamine_drop_root,
 			.args = (jbserver_arg[]){
 				{ .name = "caller-token", .type = JBS_TYPE_CALLER_TOKEN, .out = false },
+				{ 0 },
+			},
+		},
+		// JBS_DOPAMINE_DIAGNOSTIC_LOG_FD (fixed read-only log selectors)
+		{
+			.handler = dopamine_diagnostic_log_fd,
+			.args = (jbserver_arg[]){
+				{ .name = "selector", .type = JBS_TYPE_UINT64, .out = false },
+				{ .name = "log-fd", .type = JBS_TYPE_FD, .out = true },
 				{ 0 },
 			},
 		},

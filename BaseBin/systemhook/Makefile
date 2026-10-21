@@ -6,6 +6,10 @@ LDFLAGS = -dynamiclib
 INLINE_SVC_OBJS = .inline_svc.o
 INLINE_SVC_ARCH_OBJS = .inline_svc.arm64.o .inline_svc.arm64e.o
 
+ifeq ($(TERMINAL_DIAGNOSTICS),1)
+CFLAGS += -DROOTHIDE_TERMINAL_DIAGNOSTICS=1
+endif
+
 sign: $(TARGET)
 	@ldid -Cadhoc -S $^
 

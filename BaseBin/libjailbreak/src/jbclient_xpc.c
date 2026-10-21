@@ -9,6 +9,7 @@
 #include <dlfcn.h>
 #include <os/alloc_once_private.h>
 #include <errno.h>
+#include <limits.h>
 #include "runtime_identity.h"
 #include <uuid/uuid.h>
 
@@ -615,6 +616,39 @@ bool jbclient_dopamine_is_jailbroken(void)
 		return result;
 	}
 	return false;
+}
+
+int jbclient_dopamine_diagnostic_log_fd(uint64_t selector, int *outFD)
+{
+    if (!outFD) return EINVAL;
+    *outFD = -1;
+    xpc_object_t args = xpc_dictionary_create_empty();
+    if (!args) return ENOMEM;
+    xpc_dictionary_set_uint64(args, "selector", selector);
+    xpc_object_t reply = jbserver_xpc_send(JBS_DOMAIN_DOPAMINE, JBS_DOPAMINE_DIAGNOSTIC_LOG_FD, args);
+    xpc_release(args);
+    if (!reply) return EIO;
+    if (xpc_get_type(reply) != XPC_TYPE_DICTIONARY) {
+        xpc_release(reply);
+        return EPROTO;
+    }
+    int result = EPROTO;
+    xpc_object_t status = xpc_dictionary_get_value(reply, "result");
+    if (status && xpc_get_type(status) == XPC_TYPE_INT64) {
+        int64_t value = xpc_dictionary_get_int64(reply, "result");
+        if (value >= 0 && value <= INT_MAX) result = (int)value;
+    }
+    if (!result) {
+        xpc_object_t descriptor = xpc_dictionary_get_value(reply, "log-fd");
+        if (!descriptor || xpc_get_type(descriptor) != XPC_TYPE_FD) result = EPROTO;
+        else {
+            int fd = xpc_dictionary_dup_fd(reply, "log-fd");
+            if (fd < 0) result = errno ?: EIO;
+            else *outFD = fd;
+        }
+    }
+    xpc_release(reply);
+    return result;
 }
 
 int jbclient_dopamine_get_root(void)
