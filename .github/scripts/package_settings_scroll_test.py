@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect the explicitly approved settings scroll test; never execute iOS code."""
+"""Collect the approved private settings/terminal diagnostics test; never execute iOS code."""
 import argparse
 import json
 import os
@@ -12,10 +12,10 @@ from package_single_person_research import (
     CORE, RECEIPTS, ROOT, digest, git, inspect_package, require, uuid_map, write_json,
 )
 
-RECEIPTS = (*RECEIPTS, 'settings-scroll-tests.json')
+RECEIPTS = (*RECEIPTS, 'settings-scroll-tests.json', 'settings-timing-tests.json')
 BASE = 'c5380e3da4a365a8669545f0217bab02d928ca99'
 RUNTIME_ANCHOR = BASE
-VERIFIED_UI = 'b7e57433339928267b22a65b3ce2ae32c3be0c1a'
+VERIFIED_UI = 'ad13a957b4ab3b6bb1fd1b6922bf1f98a1dd7eac'
 VERIFIED_TESTS = VERIFIED_UI
 FIRMWARE_COMMIT = '28829475b7f00c3c881ed03602020d0907d84eac'
 REPOSITORY = 'kulinichx/RootHide-Dev'
@@ -23,8 +23,14 @@ REF = 'refs/heads/codex/ios17-settings-scroll-20261020'
 SOURCE_PATHS = {
     'Application/Dopamine/UI/DOMainViewController.m',
     'Application/Dopamine/UI/Settings/DOSettingsController.m',
+    'Application/Dopamine/UI/Settings/DOSettingsTiming.h',
+    'Application/Dopamine/UI/DORootHideDiagnostics.h',
+    'Application/Dopamine/UI/DOUIManager.h',
+    'Application/Dopamine/UI/DOUIManager.m',
     '.github/scripts/test_runtime_identity.py',
     '.github/scripts/test_settings_runtime_snapshot.py',
+    '.github/scripts/test_settings_timing.py',
+    '.github/scripts/test_roothide_diagnostic_export.py',
 }
 DELIVERY_PATHS = {
     '.github/workflows/roothide.yml',
@@ -82,13 +88,14 @@ def delivery_scope():
         'source_tree_excluding_settings_and_delivery': trees,
         'run_id': os.environ['GITHUB_RUN_ID'], 'run_attempt': os.environ['GITHUB_RUN_ATTEMPT'],
         'run_url': 'https://github.com/' + REPOSITORY + '/actions/runs/' + os.environ['GITHUB_RUN_ID'],
-        'classification': 'settings-scroll-test', 'distributable': False,
+        'classification': 'settings-diagnostics-test', 'distributable': False,
         'F1': 'FAIL', 'F3': 'FAIL', 'device_acceptance': False,
         'known_limitations': [
-            'Settings scrolling and existing functions require device regression testing; firmware source is unchanged from c5380e3.',
+            'Timing and terminal diagnostics only; no device performance or terminal fix is claimed. Firmware/runtime are unchanged from c5380e3.',
+            'Timing reports elapsed main-thread work in overlapping categories, not FPS or GPU time. Terminal EOF may produce no crash report.',
             'F1: timeout/late server work ownership remains unresolved.',
             'F3: bounded userspace reboot handoff remains unresolved.',
-            'This is a private settings scroll candidate, not a stable release.',
+            'This is a private diagnostics candidate, not a stable release.',
         ],
     }
 
@@ -125,8 +132,18 @@ def collect(output):
     require(settings['pass'] is True and settings['controller_sha256'] ==
             digest((ROOT / 'Application/Dopamine/UI/Settings/DOSettingsController.m').read_bytes()),
             'Settings regression receipt does not match source')
+    timing = json.loads((ROOT / 'artifacts/settings-timing-tests.json').read_text())
+    require(timing['pass'] is True and timing['device_scrolling_measured'] is False,
+            'Settings timing regression receipt did not pass')
+    expected_timing_sources = {'Settings/DOSettingsController.m', 'Settings/DOSettingsTiming.h',
+                               'DOUIManager.m', 'DOUIManager.h'}
+    require(set(timing['source_sha256']) == expected_timing_sources,
+            'Timing receipt source list mismatch')
+    for path, expected in timing['source_sha256'].items():
+        require(digest((ROOT / 'Application/Dopamine/UI' / path).read_bytes()) == expected,
+                'Timing receipt does not match source: ' + path)
     output.mkdir(parents=True)
-    name = 'Dopamine_3.0.7-' + scope['final_commit'][:7] + '_Settings-scroll-test.tipa'
+    name = 'Dopamine_3.0.7-' + scope['final_commit'][:7] + '_Settings-diagnostics-test.tipa'
     shutil.copyfile(tipa, output / name)
     require((output / name).read_bytes() == tipa.read_bytes(), 'Package copy mismatch')
     for receipt in RECEIPTS:
@@ -137,7 +154,7 @@ def collect(output):
         'package': {'name': name, 'size': tipa.stat().st_size, 'sha256': digest(tipa.read_bytes())},
         'receipt_sha256': {p.name: digest(p.read_bytes()) for p in sorted(output.iterdir()) if p.name != name}}
     write_json(output / 'package-manifest.json', manifest)
-    print('Collected approved settings scroll test package:', name)
+    print('Collected approved settings diagnostics test package:', name)
 
 
 def verify(directory):
@@ -146,12 +163,12 @@ def verify(directory):
             and manifest['verified_ui_commit'] == VERIFIED_UI and manifest['verified_tests_commit'] == VERIFIED_TESTS
             and manifest['verified_firmware_commit'] == FIRMWARE_COMMIT
             and manifest['repository'] == REPOSITORY and manifest['ref'] == REF
-            and manifest['classification'] == 'settings-scroll-test'
+            and manifest['classification'] == 'settings-diagnostics-test'
             and manifest['distributable'] is False and manifest['device_acceptance'] is False
             and manifest['F1'] == manifest['F3'] == 'FAIL', 'Group test boundary mismatch')
     package = manifest['package']
     require(package['name'] == 'Dopamine_3.0.7-' + manifest['final_commit'][:7]
-            + '_Settings-scroll-test.tipa', 'Unexpected package filename')
+            + '_Settings-diagnostics-test.tipa', 'Unexpected package filename')
     path = directory / package['name']
     require(path.stat().st_size == package['size'] and digest(path.read_bytes()) == package['sha256'],
             'Downloaded package hash/size mismatch')
@@ -176,7 +193,7 @@ def main():
         scope = delivery_scope()
         (ROOT / 'artifacts').mkdir(exist_ok=True)
         write_json(ROOT / 'artifacts/settings-scroll-source-proof.json', scope)
-        print('Approved settings scroll test scope and unchanged firmware/runtime outside settings scope verified.')
+        print('Approved settings diagnostics scope and unchanged firmware/runtime outside UI diagnostics verified.')
     elif args.output:
         collect(args.output)
     else:
