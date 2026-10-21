@@ -92,6 +92,10 @@ static char*read_file_to_string(const char *p){assert(!strcmp(p,"/basebin/.versi
 static bool dopamine_domain_allowed(audit_token_t t){assert(t==42);return !denied;}
 static int dopamine_get_root(audit_token_t*t){(void)t;forbidden++;abort();}
 static int dopamine_drop_root(audit_token_t*t){(void)t;forbidden++;abort();}
+// This identity-only harness keeps the complete production action table.
+// Diagnostic FD behavior is exercised by test_terminal_diagnostics; reaching
+// that unrelated handler here must fail just like reaching get/drop-root.
+static int dopamine_diagnostic_log_fd(uint64_t selector,int *out){(void)selector;(void)out;forbidden++;abort();}
 static int proc_credential_restore_self(void*p){(void)p;forbidden++;abort();}
 int dopamine_is_jailbroken(char **,xpc_object_t *);
 bool rh_image_uuid_for_address(const void*p,char out[37]){
@@ -120,6 +124,8 @@ static bool unchanged(struct rh_runtime_identity a,struct rh_runtime_identity b)
  return a.first_load==b.first_load && !strcmp(a.handler_uuid,b.handler_uuid) && !strcmp(a.credential_uuid,b.credential_uuid);
 }
 int main(void){
+ assert(gDopamineDomain.actions[3].handler==(void*)dopamine_diagnostic_log_fd);
+ assert(!gDopamineDomain.actions[4].handler);
  struct rh_runtime_identity value={0},sentinel={0};sentinel.first_load=true;strcpy(sentinel.handler_uuid,"unchanged");
  assert(jbclient_dopamine_runtime_identity(&value)==RH_RUNTIME_MALFORMED); // phase not yet published
  dopamine_runtime_identity_set_first_load(true);

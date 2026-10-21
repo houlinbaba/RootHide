@@ -24,7 +24,8 @@ VERIFIED_TERMINAL_BASE = '6cef532e683637892e59746a15e6a352527c7813'
 # Exact diagnostic blobs are pinned below; the rest of the runtime and all
 # submodules must still match the firmware baseline. No floating source pin.
 TERMINAL_SOURCE_SHA256 = {
-    ".github/scripts/test_terminal_diagnostics.py": "47baf8f23ce9170216fad25e3014d6cc11a71cce7c5891d2b2175ab0cf97db8a",
+    ".github/scripts/test_runtime_identity.py": "5c087bf70c6dcb21e382788da5a77a719e3696697db65e67a4eee9206c611da4",
+    ".github/scripts/test_terminal_diagnostics.py": "de1b59b3247aff448d24e028818abf6342adae866353574b4eb8172131dccdcd",
     ".github/scripts/test_roothide_diagnostic_export.py": "e2f2e854a80c9dd1c742b57d9df87ed8d90bb60fa8b16515f515a37df85638e3",
     "Application/Dopamine/UI/DOUIManager.m": "02a53d8b5c84e7e3e622de25fef459cd2ecef214e3892ca0ba786332105d0974",
     "Application/Dopamine/UI/DODiagnosticLogQuery.h": "f9e871ec1107a14aee2843808e17e62bb5f5439419a675df3df4aadf5402e91e",
