@@ -193,7 +193,7 @@ SCROLL_HARNESS = r'''
 @interface DOSettingsController : DOTestControllerBase {
 @public NSArray *_specifiers;
 }
-@property BOOL customGlassIdleRefreshScheduled, runtimeSettingsRefreshPending, isViewLoaded;
+@property BOOL customGlassIdleRefreshScheduled, runtimeSettingsRefreshPending, isViewLoaded, settingsTimingEnabled;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *runtimeSettingsDisplayedValues;
 @property(nonatomic, strong) DOTestView *view;
 @property(nonatomic, strong) UITableView *testTable;
@@ -210,6 +210,7 @@ SCROLL_HARNESS = r'''
 - (void)reloadSpecifier:(PSSpecifier *)specifier animated:(BOOL)animated;
 - (void)customGlassRefreshSectionBackdrops;
 - (void)customGlassCleanupTableHairlines;
+- (void)flushSettingsTiming;
 @end
 @implementation DOSettingsController
 - (id)valueForKey:(NSString *)key {
@@ -229,6 +230,7 @@ SCROLL_HARNESS = r'''
     self.backdropRefreshes++;
 }
 - (void)customGlassCleanupTableHairlines { self.hairlineCleanups++; }
+- (void)flushSettingsTiming {}
 // PRODUCTION_METHODS
 @end
 static void pumpFor(NSTimeInterval interval) {
@@ -350,9 +352,9 @@ def main():
         '- (id)readRuntimePreferenceValue:',
     ))
     assert 'reloadSpecifiers' not in idle_methods
-    body = method(source, '- (void)customGlassCleanupTableHairlines')
+    body = method(source, '- (void)customGlassCleanupTableHairlinesContent')
     assert body.index('customGlassDeferRefreshWhileScrolling:tableView') < body.index('for (')
-    geometry = method(source, '- (void)customGlassRefreshSectionBackdrops')
+    geometry = method(source, '- (void)customGlassRefreshSectionBackdropsContent')
     # UITableView can change row geometry and reorder subviews while scrolling.
     # Do not defer the RC7 placement/stacking maintenance with the idle work.
     assert 'customGlassDeferRefreshWhileScrolling' not in geometry
@@ -362,9 +364,20 @@ def main():
     assert 'customGlassRefreshSectionBackdrops' in display
     assert 'customGlassScheduleIdleRefresh' not in display
     baseline = subprocess.check_output(['git', '-c', 'safe.directory=' + ROOT.as_posix(),
-        'show', 'c5380e3da4a365a8669545f0217bab02d928ca99:Application/Dopamine/UI/Settings/DOSettingsController.m'],
+        'show', '8924e146115d01fd2e7708f3e03d5b82435df607:Application/Dopamine/UI/Settings/DOSettingsController.m'],
         cwd=ROOT).decode('utf-8')
-    assert geometry == method(baseline, '- (void)customGlassRefreshSectionBackdrops')
+    # Only the measuring wrapper/selector is new. The RC7 geometry and stacking
+    # body stays identical, with the material call going through its own timer.
+    normalized = geometry.replace('customGlassRefreshSectionBackdropsContent', 'customGlassRefreshSectionBackdrops')
+    normalized = normalized.replace('[self reloadSettingsGlassMaterial:glass]', '[glass reloadMaterial]')
+    assert normalized == method(baseline, '- (void)customGlassRefreshSectionBackdrops')
+    for original, wrapped in (
+        ('customGlassCleanupTableHairlines', 'customGlassCleanupTableHairlinesContent'),
+        ('customGlassStyleVisibleCell:', 'customGlassStyleVisibleCellContent:'),
+    ):
+        signature = '- (void)' + wrapped
+        # Compare against the baseline, so a shared regression cannot pass.
+        assert method(source, signature).replace(wrapped, original, 1) == method(baseline, '- (void)' + original)
     assert display == method(baseline[baseline.index('@implementation DOSettingsController'):], '- (void)tableView:')
     assert 'test_settings_runtime_snapshot.py' in (ROOT / '.github/workflows/roothide.yml').read_text(encoding='utf-8')
     print('PASS: settings cell getters use cached values, service refresh changes no process credentials', flush=True)
@@ -401,7 +414,7 @@ def main():
         'uikit_runtime': False, 'device_scrolling_measured': False,
         'controller_sha256': hashlib.sha256((SETTINGS / 'DOSettingsController.m').read_bytes()).hexdigest(),
         'checks': ['background service snapshot and edit preservation',
-                   'RC7 geometry/stacking and cell callback source restored to c5380e3',
+                   'RC7 geometry/stacking and styling bodies unchanged through timing wrappers',
                    'runtime/hairline tracking/dragging/deceleration deferral', 'coalesced idle callbacks',
                    'only changed displayed rows reloaded', 'departure cancellation and reentry'],
     }, indent=2) + '\n', encoding='utf-8')

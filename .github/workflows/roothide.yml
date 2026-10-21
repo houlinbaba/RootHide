@@ -22,7 +22,7 @@ on:
         default: false
         type: boolean
       settings_scroll_delivery:
-        description: Private settings scroll test on device-tested A17 baseline
+        description: Private settings timing and terminal diagnostics on c538 baseline
         required: false
         default: false
         type: boolean
@@ -281,6 +281,9 @@ jobs:
       - name: Settings slow-service snapshot regressions
         run: python3 .github/scripts/test_settings_runtime_snapshot.py
 
+      - name: Settings timing and ordered export regressions
+        run: python3 .github/scripts/test_settings_timing.py
+
       - name: App check-in grants and active session regressions
         run: python3 .github/scripts/test_app_checkin.py
 
@@ -358,16 +361,16 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
-      - name: Collect private settings scroll test package
+      - name: Collect private settings diagnostics test package
         if: success() && inputs.settings_scroll_delivery == true
-        run: python3 .github/scripts/package_settings_scroll_test.py --output artifacts/settings-scroll-test
+        run: python3 .github/scripts/package_settings_scroll_test.py --output artifacts/settings-diagnostics-test
 
-      - name: Upload private settings scroll test package
+      - name: Upload private settings diagnostics test package
         if: success() && inputs.settings_scroll_delivery == true
         uses: actions/upload-artifact@v4
         with:
-          name: settings-scroll-test-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/settings-scroll-test/
+          name: settings-diagnostics-test-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/settings-diagnostics-test/
           if-no-files-found: error
           retention-days: 3
 

@@ -17,6 +17,20 @@
 #import <pthread.h>
 #import <sys/utsname.h>
 
+// Timing writes and exports share a serial utility queue: an export includes
+// the summary just submitted by Settings without blocking its main thread.
+static dispatch_queue_t DOFileDiagnosticsQueue(void)
+{
+    static dispatch_queue_t queue;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        dispatch_queue_attr_t attributes = dispatch_queue_attr_make_with_qos_class(
+            DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0);
+        queue = dispatch_queue_create("com.opa334.Dopamine.fileDiagnostics", attributes);
+    });
+    return queue;
+}
+
 @implementation DOUIManager
 
 + (instancetype)sharedInstance
@@ -256,6 +270,15 @@
     return [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/RootHideStage.log"];
 }
 
+- (void)appendSettingsTimingReport:(NSString *)report
+{
+    NSString *path = [self rootHideStageLogPath];
+    NSString *snapshot = [report copy];
+    dispatch_async(DOFileDiagnosticsQueue(), ^{
+        roothide_stage_file_log(path.fileSystemRepresentation, "%s", snapshot.UTF8String);
+    });
+}
+
 - (void)shareRootHideStageLogFromView:(UIView *)sourceView
 {
     if (_rootHideExportInProgress || !sourceView.window) return;
@@ -278,7 +301,7 @@
         @"/var/mobile/Library/Logs/CrashReporter/Dopamine-app-startup-501.log"];
     NSArray *crashDirectories = @[@"/var/mobile/Library/Logs/CrashReporter", @"/var/mobile/Library/Logs/CrashReporter/Retired",
         @"/Library/Logs/CrashReporter", @"/var/root/Library/Logs/CrashReporter"];
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    dispatch_async(DOFileDiagnosticsQueue(), ^{
         NSString *report = DORootHideDiagnosticReport(header, logs, crashDirectories, root, [NSDate date]);
         NSString *directory = [NSTemporaryDirectory() stringByAppendingPathComponent:[@"RootHideDiagnostics-" stringByAppendingString:NSUUID.UUID.UUIDString]];
         NSString *path = [directory stringByAppendingPathComponent:@"RootHide-diagnostics.txt"];

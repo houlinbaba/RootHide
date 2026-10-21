@@ -75,13 +75,19 @@ static void DOAppendDiagnosticFile(NSMutableString *report, NSString *path, NSUI
     [report appendFormat:@"\n\n--- %@ ---\n%@\n%@", path, status, text ?: @""];
 }
 
+static NSArray<NSString *> *DODiagnosticTargetProcesses(void)
+{
+    return @[@"sileo", @"roothide", @"launchd", @"newterm", @"newterm2", @"terminal",
+             @"newtermloginhelper", @"login", @"zsh", @"bash", @"dash"];
+}
+
 static NSString *DODiagnosticCrashProcess(NSString *name)
 {
     NSString *lower = name.lowercaseString;
     if (![lower.pathExtension isEqualToString:@"ips"] &&
         ![lower.pathExtension isEqualToString:@"crash"] &&
         ![lower hasSuffix:@".ips.ca.synced"] && ![lower hasSuffix:@".ips.synced"]) return nil;
-    for (NSString *process in @[@"sileo", @"roothide", @"launchd"]) {
+    for (NSString *process in DODiagnosticTargetProcesses()) {
         if ([lower hasPrefix:[process stringByAppendingString:@"-"]]) return process;
     }
     return nil;
@@ -140,7 +146,7 @@ static void DOAppendDiagnosticCrashes(NSMutableString *report, NSArray<NSString 
         if (scanned == 4096) [report appendFormat:@"\nCrash directory %@: scan limit reached; selection may be incomplete", directory];
         closedir(dir);
     }
-    for (NSString *process in @[@"sileo", @"roothide", @"launchd"]) {
+    for (NSString *process in DODiagnosticTargetProcesses()) {
         NSArray *items = newest[process];
         if (!items.count) [report appendFormat:@"\nNo recent %@ crash file found. This does not establish whether the process crashed.", process];
         for (NSDictionary *item in items) {
@@ -180,7 +186,7 @@ static void DOAppendDiagnosticPath(NSMutableString *report, NSString *path)
 static NSString *DORootHideDiagnosticReport(NSString *header, NSArray<NSString *> *logs,
                                           NSArray<NSString *> *crashDirectories, NSString *root, NSDate *now)
 {
-    NSMutableString *report = [NSMutableString stringWithFormat:@"RootHide diagnostics\n%@\nExported: %@\nCollected: RootHide stage/startup logs, bounded bootstrap APT/dpkg logs and recent Sileo/RootHide/launchd crashes.\nMissing/unreadable files are not proof of success.\n", header, now];
+    NSMutableString *report = [NSMutableString stringWithFormat:@"RootHide diagnostics\n%@\nExported: %@\nCollected: RootHide stage/startup/timing logs, bounded bootstrap APT/dpkg logs and recent Sileo/RootHide/launchd/terminal/login/shell crashes.\nMissing/unreadable files are not proof of success or of missing components.\nSession Ended can occur without a crash report.\n", header, now];
     for (NSString *path in logs) DOAppendDiagnosticFile(report, path, 256 * 1024, YES);
     if (root.length) {
         for (NSString *name in @[@"Dopamine-app-startup-0.log", @"Dopamine-app-startup-501.log"]) {
@@ -203,13 +209,34 @@ static NSString *DORootHideDiagnosticReport(NSString *header, NSArray<NSString *
         }
         for (NSString *relative in @[@"basebin/.version", @"basebin/systemhook.dylib", @"basebin/roothidehooks.dylib",
                                      @"usr/lib/roothideinit.dylib", @"usr/lib/roothidepatch.dylib", @"usr/lib/libroothide.dylib",
-                                     @"usr/lib/liblzma.5.dylib", @"usr/lib/libzstd.1.dylib"]) {
+                                     @"usr/lib/liblzma.5.dylib", @"usr/lib/libzstd.1.dylib",
+                                     @"usr/bin/login", @"bin/sh", @"usr/bin/zsh", @"usr/bin/bash",
+                                     @"etc/pam.d/login"]) {
             DOAppendDiagnosticPath(report, [root stringByAppendingPathComponent:relative]);
         }
         for (NSString *app in @[@"Sileo", @"RootHide"]) {
             NSString *bundle = [root stringByAppendingPathComponent:[NSString stringWithFormat:@"Applications/%@.app", app]];
             for (NSString *relative in @[app, @".jbroot", @".jbroot/usr/lib/libroothide.dylib"]) {
                 DOAppendDiagnosticPath(report, [bundle stringByAppendingPathComponent:relative]);
+            }
+        }
+        [report appendString:@"\n\n--- Known terminal bundle paths (absence does not identify the installed terminal) ---"];
+        for (NSString *app in @[@"NewTerm", @"NewTerm2", @"Terminal"]) {
+            NSString *bundle = [root stringByAppendingPathComponent:[NSString stringWithFormat:@"Applications/%@.app", app]];
+            for (NSString *relative in @[app, @"NewTermLoginHelper", @".jbroot"]) {
+                DOAppendDiagnosticPath(report, [bundle stringByAppendingPathComponent:relative]);
+            }
+            NSString *status = nil;
+            NSString *infoPath = [bundle stringByAppendingPathComponent:@"Info.plist"];
+            NSData *data = DODiagnosticRead(infoPath, 64 * 1024, NO, &status);
+            id info = data ? [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:NULL error:nil] : nil;
+            [report appendFormat:@"\n%@: %@", infoPath, status];
+            if ([info isKindOfClass:NSDictionary.class]) {
+                for (NSString *key in @[@"CFBundleIdentifier", @"CFBundleShortVersionString", @"CFBundleVersion", @"CFBundleExecutable"]) {
+                    id value = info[key];
+                    if ([value isKindOfClass:NSString.class])
+                        [report appendFormat:@" %@=%@", key, [value substringToIndex:MIN((NSUInteger)256, [value length])]];
+                }
             }
         }
     } else {

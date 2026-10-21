@@ -21,6 +21,7 @@
 #import "DOButtonCell.h"
 #import "../DOSupporterLicense.h"
 #import "DORuntimeSettingsSnapshot.h"
+#import "DOSettingsTiming.h"
 #import "../DORootHideDiagnostics.h"
 #import <libjailbreak/jbclient_xpc.h>
 #include <math.h>
@@ -386,16 +387,56 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 
 @end
 
-@interface DOSettingsController ()
+@interface DOSettingsController () {
+    struct DOSettingsTiming _settingsTiming;
+}
 
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, DOCustomLiquidGlassView *> *customGlassSectionBackdropViews;
 @property(nonatomic) BOOL customGlassIdleRefreshScheduled;
 @property(nonatomic) BOOL runtimeSettingsRefreshPending;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *runtimeSettingsDisplayedValues;
+@property(nonatomic, weak) UITableView *settingsTimingTable;
+@property(nonatomic) BOOL settingsTimingEnabled;
+@property(nonatomic) NSUInteger settingsTimingReports;
 
 @end
 
 @implementation DOSettingsController
+
+- (BOOL)settingsTimingIsScrolling
+{
+    UITableView *table = self.settingsTimingTable;
+    return table.tracking || table.dragging || table.decelerating;
+}
+
+- (void)flushSettingsTiming
+{
+    // At most sixteen summaries per visit; no writes or formatting in a
+    // scrolling callback. Flush before exporting or leaving the page as well.
+    if (!self.settingsTimingEnabled || self.settingsTimingReports >= 16) return;
+    BOOL hasSamples = NO;
+    for (int mode = 0; mode < 2; mode++)
+        for (int kind = 0; kind < DOSettingsTimingKindCount; kind++)
+            hasSamples |= _settingsTiming.samples[mode][kind].calls > 0;
+    if (!hasSamples) return;
+    self.settingsTimingReports++;
+    NSMutableString *report = [NSMutableString stringWithFormat:
+        @"settings.timing v1 batch=%lu elapsed_ms inclusive_categories=1 fps_measured=0 thresholds_ms=8.333,16.667 cap=16",
+        (unsigned long)self.settingsTimingReports];
+    NSArray *names = @[@"backdrop", @"material", @"cell", @"hairlines", @"layout"];
+    for (int mode = 0; mode < 2; mode++) {
+        for (int kind = 0; kind < DOSettingsTimingKindCount; kind++) {
+            struct DOSettingsTimingSample sample = _settingsTiming.samples[mode][kind];
+            if (!sample.calls) continue;
+            [report appendFormat:@"\n%@ %@ n=%llu total=%.3f max=%.3f over8=%llu over16=%llu",
+                mode ? @"scroll" : @"idle", names[kind],
+                (unsigned long long)sample.calls, sample.total * 1000, sample.maximum * 1000,
+                (unsigned long long)sample.over8ms, (unsigned long long)sample.over16ms];
+        }
+    }
+    memset(&_settingsTiming, 0, sizeof(_settingsTiming));
+    [[DOUIManager sharedInstance] appendSettingsTimingReport:report];
+}
 
 - (UIColor *)customGlassForegroundWithAlpha:(CGFloat)alpha
 {
@@ -463,6 +504,15 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 
 - (void)customGlassCleanupTableHairlines
 {
+    double start = self.settingsTimingEnabled ? DOSettingsTimingNow() : 0;
+    BOOL scrolling = [self settingsTimingIsScrolling];
+    [self customGlassCleanupTableHairlinesContent];
+    if (start) DOSettingsTimingRecord(&_settingsTiming, DOSettingsTimingHairlines,
+        scrolling, start, DOSettingsTimingNow());
+}
+
+- (void)customGlassCleanupTableHairlinesContent
+{
     UITableView *tableView = [self valueForKey:@"table"];
     if (!tableView)
         return;
@@ -515,6 +565,15 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 
 - (void)customGlassStyleVisibleCell:(UITableViewCell *)cell atIndexPath:(NSIndexPath *)indexPath
 {
+    double start = self.settingsTimingEnabled ? DOSettingsTimingNow() : 0;
+    BOOL scrolling = [self settingsTimingIsScrolling];
+    [self customGlassStyleVisibleCellContent:cell atIndexPath:indexPath];
+    if (start) DOSettingsTimingRecord(&_settingsTiming, DOSettingsTimingCell,
+        scrolling, start, DOSettingsTimingNow());
+}
+
+- (void)customGlassStyleVisibleCellContent:(UITableViewCell *)cell atIndexPath:(NSIndexPath *)indexPath
+{
     if (!cell)
         return;
 
@@ -556,6 +615,24 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 }
 
 - (void)customGlassRefreshSectionBackdrops
+{
+    double start = self.settingsTimingEnabled ? DOSettingsTimingNow() : 0;
+    BOOL scrolling = [self settingsTimingIsScrolling];
+    [self customGlassRefreshSectionBackdropsContent];
+    if (start) DOSettingsTimingRecord(&_settingsTiming, DOSettingsTimingBackdrop,
+        scrolling, start, DOSettingsTimingNow());
+}
+
+- (void)reloadSettingsGlassMaterial:(DOCustomLiquidGlassView *)glass
+{
+    double start = self.settingsTimingEnabled ? DOSettingsTimingNow() : 0;
+    BOOL scrolling = [self settingsTimingIsScrolling];
+    [glass reloadMaterial];
+    if (start) DOSettingsTimingRecord(&_settingsTiming, DOSettingsTimingMaterial,
+        scrolling, start, DOSettingsTimingNow());
+}
+
+- (void)customGlassRefreshSectionBackdropsContent
 {
     UITableView *tableView = [self valueForKey:@"table"];
     if (!tableView)
@@ -605,7 +682,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
         glass.layer.maskedCorners =
             kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
             kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
-        [glass reloadMaterial];
+        [self reloadSettingsGlassMaterial:glass];
         [tableView sendSubviewToBack:glass];
     }
 
@@ -788,13 +865,18 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
     [self applyPendingRuntimeSettingsRefresh];
     [self customGlassRefreshSectionBackdrops];
     [self customGlassCleanupTableHairlines];
+    [self flushSettingsTiming];
 }
 
 - (void)viewDidLayoutSubviews
 {
+    double start = self.settingsTimingEnabled ? DOSettingsTimingNow() : 0;
+    BOOL scrolling = [self settingsTimingIsScrolling];
     [super viewDidLayoutSubviews];
     [self customGlassRefreshSectionBackdrops];
     [self customGlassCleanupTableHairlines];
+    if (start) DOSettingsTimingRecord(&_settingsTiming, DOSettingsTimingLayout,
+        scrolling, start, DOSettingsTimingNow());
 }
 
 - (void)viewDidLoad
@@ -806,6 +888,10 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 - (void)viewWillAppear:(BOOL)arg1
 {
     [super viewWillAppear:arg1];
+    memset(&_settingsTiming, 0, sizeof(_settingsTiming));
+    self.settingsTimingReports = 0;
+    self.settingsTimingTable = [self valueForKey:@"table"];
+    self.settingsTimingEnabled = YES;
     [self customGlassRefreshPageAppearance];
 
     __weak typeof(self) weakSelf = self;
@@ -819,6 +905,8 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 - (void)viewWillDisappear:(BOOL)animated
 {
     [super viewWillDisappear:animated];
+    [self flushSettingsTiming];
+    self.settingsTimingEnabled = NO;
     [NSObject cancelPreviousPerformRequestsWithTarget:self
         selector:@selector(customGlassPerformIdleRefresh) object:nil];
     self.customGlassIdleRefreshScheduled = NO;
@@ -1287,6 +1375,7 @@ static NSInteger const DOCustomGlassSettingsSeparatorTag = 0xC651;
 
 - (void)shareRootHideStageLogPressed
 {
+    [self flushSettingsTiming];
     [[DOUIManager sharedInstance] shareRootHideStageLogFromView:self.view];
 }
 

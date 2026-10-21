@@ -33,6 +33,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)startLogCapture;
 - (void)shareLogRecordFromView:(UIView *)sourceView;
 - (NSString *)rootHideStageLogPath;
+- (void)appendSettingsTimingReport:(NSString *)report;
 - (void)shareRootHideStageLogFromView:(UIView *)sourceView;
 - (void)queryRootHideRuntimeIdentityFromView:(UIView *)sourceView;
 - (BOOL)isUpdateAvailable;

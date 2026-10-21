@@ -66,6 +66,16 @@ int main(int argc, char **argv) {
         save([crashes stringByAppendingPathComponent:@"launchd-new.ips"], @"LAUNCHD_NEW_SELECTED", 999999);
         save([retired stringByAppendingPathComponent:@"launchd-1792119324.367807-1.ips"], @"LAUNCHD_REFERENCED_SELECTED", 1000000);
         save([crashes stringByAppendingPathComponent:@"launchdHelper-new.ips"], @"PRIVATE_LAUNCHD_LOOKALIKE", 1000000);
+        for (NSString *process in @[@"NewTerm", @"NewTerm2", @"Terminal", @"NewTermLoginHelper", @"login", @"zsh", @"bash", @"dash"]) {
+            save([crashes stringByAppendingPathComponent:[process stringByAppendingString:@"-new.ips"]],
+                [@"TERMINAL_SELECTED_" stringByAppendingString:process], 1000000);
+        }
+        save([crashes stringByAppendingPathComponent:@"loginwindow-new.ips"], @"PRIVATE_LOGIN_LOOKALIKE", 1000000);
+        NSString *terminal = [root stringByAppendingPathComponent:@"Applications/NewTerm.app"];
+        assert([[NSFileManager defaultManager] createDirectoryAtPath:terminal withIntermediateDirectories:YES attributes:nil error:nil]);
+        assert(([@{@"CFBundleIdentifier": @"ws.hbang.NewTerm2", @"CFBundleShortVersionString": @"test-version",
+            @"CFBundleExecutable": @"NewTerm", @"UnrelatedPrivateField": @"PRIVATE_PLIST_FIELD"}
+            writeToFile:[terminal stringByAppendingPathComponent:@"Info.plist"] atomically:YES]));
         save([rootCrashes stringByAppendingPathComponent:@"RootHide-rooted.ips"], @"ROOTHIDE_ROOTED_SELECTED", 1000000);
         save([rootCrashes stringByAppendingPathComponent:@"Dopamine-app-startup-501.log"], @"ROOTED_STARTUP_SELECTED", 1000000);
         save([rootCrashes stringByAppendingPathComponent:@"OtherApp-rooted.ips"], @"PRIVATE_ROOTED_OTHER_APP", 1000000);
@@ -79,6 +89,12 @@ int main(int argc, char **argv) {
         assert([report containsString:@"CHOICY_POSTINST_SELECTED"] && [report containsString:@"APT_HISTORY_SELECTED"]);
         assert([report containsString:@"DPKG_STATUS_SELECTED"] && ![report containsString:@"APT_OLD_OMITTED"]);
         assert([report containsString:@"LAUNCHD_NEW_SELECTED"] && [report containsString:@"LAUNCHD_REFERENCED_SELECTED"]);
+        for (NSString *process in @[@"NewTerm", @"NewTerm2", @"Terminal", @"NewTermLoginHelper", @"login", @"zsh", @"bash", @"dash"])
+            assert([report containsString:[@"TERMINAL_SELECTED_" stringByAppendingString:process]]);
+        assert([report containsString:@"CFBundleIdentifier=ws.hbang.NewTerm2"]);
+        assert([report containsString:@"CFBundleShortVersionString=test-version"]);
+        assert(![report containsString:@"PRIVATE_PLIST_FIELD"] && ![report containsString:@"PRIVATE_LOGIN_LOOKALIKE"]);
+        assert([report containsString:@"usr/bin/login"] && [report containsString:@"NewTermLoginHelper"]);
         assert(DODiagnosticCrashDirectories(@[crashes, crashes], root).count == 3);
         assert([report containsString:@"unreadable (errno="] && [report containsString:@"link="]);
         assert([report containsString:[link stringByAppendingPathComponent:@"usr/lib/libroothide.dylib"]]);
@@ -137,13 +153,17 @@ def main():
     source = (UI / 'DOUIManager.m').read_text(encoding='utf-8')
     export = extract(source, '- (void)shareRootHideStageLogFromView:')
     assert 'Dopamine-systemhook-init.log' in export
-    assert export.index('dispatch_get_global_queue') < export.index('DORootHideDiagnosticReport(')
+    assert export.index('dispatch_async(DOFileDiagnosticsQueue()') < export.index('DORootHideDiagnosticReport(')
     assert 'dispatch_get_main_queue' in export and 'completionWithItemsHandler' in export
     assert 'fileURLWithPath:path' in export and '_rootHideExportInProgress' in export
     for forbidden in ('runAsRoot', 'runUnsandboxed', 'isJailbroken', 'jailbrokenVersion', 'HealthReport', 'jbclient_'):
         assert forbidden not in export, f'export must not wait for services: {forbidden}'
     assert 'test_roothide_diagnostic_export.py' in (ROOT / '.github/workflows/roothide.yml').read_text(encoding='utf-8')
     collector = (UI / 'DORootHideDiagnostics.h').read_text(encoding='utf-8')
+    for process in ('newterm', 'newterm2', 'terminal', 'newtermloginhelper', 'login', 'zsh', 'bash', 'dash'):
+        assert '@"' + process + '"' in collector
+    for relative in ('usr/bin/login', 'bin/sh', 'usr/bin/zsh', 'usr/bin/bash', 'etc/pam.d/login'):
+        assert '@"' + relative + '"' in collector
     assert 'DODiagnosticCrashDirectories(crashDirectories, root)' in collector
     assert 'var/mobile/Library/Logs/CrashReporter/Retired' in collector
     for relative in ('var/log/apt/term.log', 'var/log/apt/history.log', 'var/log/dpkg.log'):
