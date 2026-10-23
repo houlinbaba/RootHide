@@ -176,14 +176,19 @@ def main():
     source = (ROOT / 'BaseBin/libjailbreak/src/util.c').read_text(encoding='utf-8')
     production = function(source, 'int cmd_create_handoff_pipe(') + '\n' + function(source, 'int cmd_wait_for_handoff(')
     app = (ROOT / 'Application/Dopamine/Jailbreak/DOEnvironmentManager.m').read_text(encoding='utf-8')
+    assert '#define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 1' in app
+    assert 'extern int posix_spawnattr_set_persona_np(' in app
+    assert 'extern int posix_spawnattr_set_persona_uid_np(' in app
+    assert 'extern int posix_spawnattr_set_persona_gid_np(' in app
     caller = function(app, '- (int)spawnJbctlAsRootWithArgs:')
     assert 'cmd_create_handoff_pipe(waitPipe)' in caller
     assert 'posix_spawn_file_actions_addclose(&actions, waitPipe[0])' in caller
     assert 'posix_spawn_file_actions_addclose(&actions, waitPipe[1])' in caller
-    assert 'spawnResult = posix_spawn(&pid, argBuf[0], &actions, &attr, argBuf, environ)' in caller
-    assert 'exec_cmd_roothide_spawn(' not in caller
-    assert 'posix_spawnattr_set_persona_' not in app
-    assert 'POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE' not in app
+    assert 'posix_spawnattr_set_persona_np(&attr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE)' in caller
+    assert 'posix_spawnattr_set_persona_uid_np(&attr, 0)' in caller
+    assert 'posix_spawnattr_set_persona_gid_np(&attr, 0)' in caller
+    assert 'exec_cmd_roothide_spawn(&pid, argBuf[0], &actions, &attr, argBuf, environ)' in caller
+    assert 'spawnResult = posix_spawn(&pid, argBuf[0]' not in caller
     assert caller.index('close(waitPipe[1]); waitPipe[1] = -1') < caller.index('cmd_wait_for_exit(pid)')
     jbctl = (ROOT / 'BaseBin/jbctl/src/main.m').read_text(encoding='utf-8')
     gate = jbctl.index('int r = cmd_wait_for_handoff(argv[argc-1])')
