@@ -6,7 +6,7 @@ on:
       build_mode:
         description: Build scope
         required: true
-        default: focused
+        default: full
         type: choice
         options:
           - focused
@@ -36,7 +36,7 @@ concurrency:
 
 env:
   RESEARCH_BUILD: "1"
-  BUILD_MODE: ${{ github.event.inputs.build_mode || 'focused' }}
+  BUILD_MODE: ${{ github.event.inputs.build_mode || 'full' }}
   THEOS: ${{ github.workspace }}/theos
   THEOS_COMMIT: 88506b2c22e9e07dd4ed055f23c9e398a117a2c7
   IOS_SDK_VERSION: "16.5"
@@ -379,6 +379,15 @@ jobs:
           # The collection directory also contains audit receipts and source
           # manifests. The public download is the installable TIPA only.
           path: artifacts/terminal-session-diagnostics-test/*.tipa
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: Upload full build TIPA
+        if: success() && env.BUILD_MODE == 'full' && inputs.settings_scroll_delivery != true
+        uses: actions/upload-artifact@v4
+        with:
+          name: dopamine-tipa-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: Application/Dopamine.tipa
           if-no-files-found: error
           retention-days: 3
 
