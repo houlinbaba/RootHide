@@ -376,12 +376,17 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: terminal-session-diagnostics-test-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: artifacts/terminal-session-diagnostics-test/
+          # The collection directory also contains audit receipts and source
+          # manifests. The public download is the installable TIPA only.
+          path: artifacts/terminal-session-diagnostics-test/*.tipa
           if-no-files-found: error
           retention-days: 3
 
       - name: Upload compile research evidence only
-        if: always()
+        # Public settings delivery is a user-facing TIPA download. Keep the
+        # evidence in the job logs/checks without adding a second download
+        # artifact to that delivery.
+        if: always() && inputs.settings_scroll_delivery != true
         uses: actions/upload-artifact@v4
         with:
           name: compile-research-evidence-${{ github.sha }}
