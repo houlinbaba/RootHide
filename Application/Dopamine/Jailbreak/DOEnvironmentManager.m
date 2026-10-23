@@ -513,9 +513,10 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *attr, uid
         roothide_stage_log("restart.spawn.begin command=%s uid=%d euid=%d gid=%d",
                            command.UTF8String, getuid(), geteuid(), getgid());
         // Initial activation prepared this child while bootstrap still had
-        // root. Release only after restoring the App, without another root RPC.
+        // root. Otherwise ask the authenticated RootHide service to prepare
+        // jbctl, then release it only after the App receives the XPC reply.
         int result = prepared.pid > 0 ? rh_userspace_reboot_finish(&prepared) :
-                     [self spawnJbctlAsRootWithArgs:@[command]];
+                     jbclient_dopamine_restart_action(command.UTF8String);
         roothide_stage_log("restart.return command=%s result=%d", command.UTF8String, result);
         roothide_stage_end();
         dispatch_async(dispatch_get_main_queue(), ^{

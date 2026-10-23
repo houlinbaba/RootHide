@@ -199,6 +199,7 @@ extern NSString *DOLocalizedString(NSString *);
 '''
 
 INTERFACE = r'''
+int jbclient_dopamine_restart_action(const char *command);
 @interface DOEnvironmentManager : NSObject {
     struct rh_userspace_reboot _preparedUserspaceReboot;
 }

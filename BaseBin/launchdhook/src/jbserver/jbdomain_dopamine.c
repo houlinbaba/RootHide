@@ -9,6 +9,10 @@
 #include <libjailbreak/runtime_identity.h>
 #include <stdatomic.h>
 #include <errno.h>
+#include <spawn.h>
+#include <unistd.h>
+#include <libjailbreak/util.h>
+#include <libjailbreak/roothide_stage.h>
 #include <libjailbreak/diagnostic_log.h>
 
 static char *read_file_to_string(const char *path) {
@@ -188,6 +192,53 @@ int dopamine_diagnostic_log_fd(uint64_t selector, int *outFD)
     return rh_diagnostic_log_open(root, selector % RH_DIAGNOSTIC_LOG_COUNT, outFD);
 }
 
+static int dopamine_restart_action(const char *command, int *releaseFDOut)
+{
+	if (!releaseFDOut) return EINVAL;
+	*releaseFDOut = -1;
+	if (!command || (strcmp(command, "respring") && strcmp(command, "reboot_userspace"))) return EINVAL;
+
+	const char *jbctl = JBROOT_PATH("/basebin/jbctl");
+	int fds[2] = {-1, -1};
+	int result = cmd_create_handoff_pipe(fds);
+	if (result) return result;
+
+	posix_spawn_file_actions_t actions;
+	posix_spawnattr_t attr;
+	bool actionsReady = false, attrReady = false;
+	result = posix_spawn_file_actions_init(&actions);
+	if (result) goto done;
+	actionsReady = true;
+	result = posix_spawn_file_actions_adddup2(&actions, fds[0], 3);
+	if (!result) result = posix_spawn_file_actions_addclose(&actions, fds[0]);
+	if (!result) result = posix_spawn_file_actions_addclose(&actions, fds[1]);
+	if (result) goto done;
+
+	result = posix_spawnattr_init(&attr);
+	if (result) goto done;
+	attrReady = true;
+	char *argv[] = {(char *)jbctl, (char *)command, "--waitfor", "3", NULL};
+	pid_t pid = -1;
+	roothide_stage_log("dopamine.restart.spawn.begin command=%s", command);
+	// This handler runs in launchd. Its spawn hook performs the executable trust
+	// and child setup under launchd's root credentials; the App must not spawn
+	// this helper from its temporary effective-root credential.
+	result = posix_spawn(&pid, jbctl, &actions, &attr, argv, NULL);
+	if (!result && pid <= 0) result = ECHILD;
+	roothide_stage_log("dopamine.restart.spawn.end command=%s result=%d pid=%d", command, result, pid);
+	if (!result) {
+		*releaseFDOut = fds[1];
+		fds[1] = -1;
+	}
+
+done:
+	if (attrReady) posix_spawnattr_destroy(&attr);
+	if (actionsReady) posix_spawn_file_actions_destroy(&actions);
+	if (fds[0] >= 0) close(fds[0]);
+	if (fds[1] >= 0) close(fds[1]);
+	return result;
+}
+
 struct jbserver_domain gDopamineDomain = {
 	.permissionHandler = dopamine_domain_allowed,
 	.actions = {
@@ -222,6 +273,15 @@ struct jbserver_domain gDopamineDomain = {
 			.args = (jbserver_arg[]){
 				{ .name = "selector", .type = JBS_TYPE_UINT64, .out = false },
 				{ .name = "log-fd", .type = JBS_TYPE_FD, .out = true },
+				{ 0 },
+			},
+		},
+		// JBS_DOPAMINE_RESTART_ACTION; only the two fixed jbctl actions are accepted.
+		{
+			.handler = dopamine_restart_action,
+			.args = (jbserver_arg[]){
+				{ .name = "command", .type = JBS_TYPE_STRING, .out = false },
+				{ .name = "release-fd", .type = JBS_TYPE_FD, .out = true },
 				{ 0 },
 			},
 		},

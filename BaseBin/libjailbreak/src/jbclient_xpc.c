@@ -10,6 +10,8 @@
 #include <os/alloc_once_private.h>
 #include <errno.h>
 #include <limits.h>
+#include <string.h>
+#include <unistd.h>
 #include "runtime_identity.h"
 #include <uuid/uuid.h>
 
@@ -671,4 +673,43 @@ int jbclient_dopamine_drop_root(void)
 		return result;
 	}
 	return -1;
+}
+
+int jbclient_dopamine_restart_action(const char *command)
+{
+	if (!command || (strcmp(command, "respring") && strcmp(command, "reboot_userspace"))) return EINVAL;
+	xpc_object_t args = xpc_dictionary_create_empty();
+	if (!args) return ENOMEM;
+	xpc_dictionary_set_string(args, "command", command);
+	xpc_object_t reply = jbserver_xpc_send(JBS_DOMAIN_DOPAMINE, JBS_DOPAMINE_RESTART_ACTION, args);
+	xpc_release(args);
+	if (!reply) return EIO;
+	if (xpc_get_type(reply) != XPC_TYPE_DICTIONARY) {
+		xpc_release(reply);
+		return EPROTO;
+	}
+
+	int result = EPROTO;
+	xpc_object_t status = xpc_dictionary_get_value(reply, "result");
+	if (status && xpc_get_type(status) == XPC_TYPE_INT64) {
+		int64_t value = xpc_dictionary_get_int64(reply, "result");
+		if (value >= 0 && value <= INT_MAX) result = (int)value;
+	}
+	if (!result) {
+		xpc_object_t descriptor = xpc_dictionary_get_value(reply, "release-fd");
+		if (!descriptor || xpc_get_type(descriptor) != XPC_TYPE_FD) result = EPROTO;
+		else {
+			int fd = xpc_dictionary_dup_fd(reply, "release-fd");
+			if (fd < 0) result = errno ?: EIO;
+			else {
+				char token = 'w';
+				ssize_t written;
+				do { written = write(fd, &token, sizeof(token)); } while (written < 0 && errno == EINTR);
+				result = written == sizeof(token) ? 0 : (written < 0 ? errno : EIO);
+				close(fd);
+			}
+		}
+	}
+	xpc_release(reply);
+	return result;
 }

@@ -172,27 +172,35 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--zig', type=Path)
     parser.add_argument('--workdir', type=Path)
+    parser.add_argument('--static-only', action='store_true')
     args = parser.parse_args()
     source = (ROOT / 'BaseBin/libjailbreak/src/util.c').read_text(encoding='utf-8')
     production = function(source, 'int cmd_create_handoff_pipe(') + '\n' + function(source, 'int cmd_wait_for_handoff(')
     app = (ROOT / 'Application/Dopamine/Jailbreak/DOEnvironmentManager.m').read_text(encoding='utf-8')
-    assert '#define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 1' in app
-    assert 'extern int posix_spawnattr_set_persona_np(' in app
-    assert 'extern int posix_spawnattr_set_persona_uid_np(' in app
-    assert 'extern int posix_spawnattr_set_persona_gid_np(' in app
-    caller = function(app, '- (int)spawnJbctlAsRootWithArgs:')
-    assert 'cmd_create_handoff_pipe(waitPipe)' in caller
-    assert 'posix_spawn_file_actions_addclose(&actions, waitPipe[0])' in caller
-    assert 'posix_spawn_file_actions_addclose(&actions, waitPipe[1])' in caller
-    assert 'posix_spawnattr_set_persona_np(&attr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE)' in caller
-    assert 'posix_spawnattr_set_persona_uid_np(&attr, 0)' in caller
-    assert 'posix_spawnattr_set_persona_gid_np(&attr, 0)' in caller
-    assert 'exec_cmd_roothide_spawn(&pid, argBuf[0], &actions, &attr, argBuf, environ)' in caller
-    assert 'spawnResult = posix_spawn(&pid, argBuf[0]' not in caller
-    assert caller.index('close(waitPipe[1]); waitPipe[1] = -1') < caller.index('cmd_wait_for_exit(pid)')
+    domains = (ROOT / 'BaseBin/libjailbreak/src/jbserver_domains.h').read_text(encoding='utf-8')
+    client_header = (ROOT / 'BaseBin/libjailbreak/src/jbclient_xpc.h').read_text(encoding='utf-8')
+    client = (ROOT / 'BaseBin/libjailbreak/src/jbclient_xpc.c').read_text(encoding='utf-8')
+    server = (ROOT / 'BaseBin/launchdhook/src/jbserver/jbdomain_dopamine.c').read_text(encoding='utf-8')
+    app_action = function(app, '- (void)performRestartAction:')
+    service = function(server, 'static int dopamine_restart_action(')
+    request = function(client, 'int jbclient_dopamine_restart_action(')
+    assert 'JBS_DOPAMINE_RESTART_ACTION' in domains
+    assert 'jbclient_dopamine_restart_action' in client_header
+    assert 'jbclient_dopamine_restart_action(command.UTF8String)' in app_action
+    assert 'posix_spawn(&pid, jbctl, &actions, &attr, argv, NULL)' in service
+    assert 'posix_spawn_file_actions_adddup2(&actions, fds[0], 3)' in service
+    assert '"respring"' in service and '"reboot_userspace"' in service
+    assert 'xpc_dictionary_dup_fd(reply, "release-fd")' in request
+    assert "char token = 'w'" in request
+    assert app_action.index('jbclient_dopamine_restart_action(command.UTF8String)') > app_action.index('prepared.pid > 0 ?')
+    # Restart is now requested through the app-authenticated launchd service,
+    # not through the App's temporary euid=0 spawn path.
     jbctl = (ROOT / 'BaseBin/jbctl/src/main.m').read_text(encoding='utf-8')
     gate = jbctl.index('int r = cmd_wait_for_handoff(argv[argc-1])')
     assert 'return r;' in jbctl[gate:jbctl.index('char *cmd = argv[1]')]
+    if args.static_only:
+        print('PASS: app-to-launchd restart action and jbctl handoff contract')
+        return
     compiler = [str(args.zig), 'cc'] if args.zig else [shutil.which('clang') or 'clang']
     context = nullcontext(str(args.workdir.resolve())) if args.workdir else tempfile.TemporaryDirectory(prefix='reboot-handoff-')
     with context as directory:

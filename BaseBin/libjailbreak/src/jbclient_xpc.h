@@ -48,6 +48,7 @@ int jbclient_boomerang_done(void);
 bool jbclient_dopamine_is_jailbroken(void);
 int jbclient_dopamine_get_root(void);
 int jbclient_dopamine_drop_root(void);
+int jbclient_dopamine_restart_action(const char *command);
 // Explicit diagnostic export only. Caller owns a successful read-only fd.
 int jbclient_dopamine_diagnostic_log_fd(uint64_t selector, int *outFD);
 
