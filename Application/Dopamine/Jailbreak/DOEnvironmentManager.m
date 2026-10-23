@@ -401,7 +401,11 @@ extern char **environ;
     int rootResult = [self runAsRoot:^{
         int sandboxResult = [self runUnsandboxed:^{
             roothide_stage_log("jbctl.posix_spawn.begin uid=%d euid=%d gid=%d", getuid(), geteuid(), getgid());
-            spawnResult = posix_spawn(&pid, argBuf[0], &actions, &attr, argBuf, environ);
+            // Keep jbctl launches on the same RootHide path as other basebin
+            // commands. It trusts the executable and prepares the child
+            // before resuming it; --waitfor still holds the actual action
+            // until this method releases the handoff pipe below.
+            spawnResult = exec_cmd_roothide_spawn(&pid, argBuf[0], &actions, &attr, argBuf, environ);
             roothide_stage_log("jbctl.posix_spawn.end result=%d pid=%d", spawnResult, pid);
             if (needsLegacySolution && spawnResult == 0) {
                 // Compatibility only: Dopamine <3.0.5 jbctl has no --waitfor support.

@@ -180,6 +180,8 @@ def main():
     assert 'cmd_create_handoff_pipe(waitPipe)' in caller
     assert 'posix_spawn_file_actions_addclose(&actions, waitPipe[0])' in caller
     assert 'posix_spawn_file_actions_addclose(&actions, waitPipe[1])' in caller
+    assert 'exec_cmd_roothide_spawn(&pid, argBuf[0], &actions, &attr, argBuf, environ)' in caller
+    assert 'spawnResult = posix_spawn(&pid, argBuf[0]' not in caller
     assert caller.index('close(waitPipe[1]); waitPipe[1] = -1') < caller.index('cmd_wait_for_exit(pid)')
     jbctl = (ROOT / 'BaseBin/jbctl/src/main.m').read_text(encoding='utf-8')
     gate = jbctl.index('int r = cmd_wait_for_handoff(argv[argc-1])')

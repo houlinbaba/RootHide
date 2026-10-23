@@ -46,6 +46,13 @@ TERMINAL_SOURCE_SHA256 = {
     "BaseBin/libjailbreak/src/roothider/dyld_patch.m": "d288d8b7fe98daa69de291ae2dca7ca899832c70381ee3491b4b1702443205e0"
 }
 TERMINAL_PATHS = set(TERMINAL_SOURCE_SHA256)
+# This delivery also carries the narrowly scoped jbctl spawn fix. Pin both
+# files so the public diagnostic package cannot silently absorb unrelated code.
+REBOOT_FIX_SOURCE_SHA256 = {
+    "Application/Dopamine/Jailbreak/DOEnvironmentManager.m": "f60b730f21c284faff9d6a5cdf258c5df64dfe69c2bec629d7d5c942581965d9",
+    ".github/scripts/test_reboot_handoff.py": "89c1ea55e10e6e32d0f53dde0c2de576c1265e9c80feb27883aab11c09bb8b47"
+}
+REBOOT_FIX_PATHS = set(REBOOT_FIX_SOURCE_SHA256)
 FIRMWARE_COMMIT = '28829475b7f00c3c881ed03602020d0907d84eac'
 REPOSITORY = 'kulinichx/RootHide'
 REF = 'refs/heads/codex/settings-diagnostics-public-20261021'
@@ -97,12 +104,16 @@ def delivery_scope():
     git('merge-base', '--is-ancestor', VERIFIED_HARNESS, head)
     git('merge-base', '--is-ancestor', VERIFIED_TERMINAL_BASE, head)
     changed = set(git('diff', '--name-only', BASE, head).decode().splitlines())
-    require(changed == SOURCE_PATHS | TERMINAL_PATHS | HARNESS_PATHS | DELIVERY_PATHS,
+    require(changed == SOURCE_PATHS | TERMINAL_PATHS | HARNESS_PATHS | DELIVERY_PATHS | REBOOT_FIX_PATHS,
             'Unexpected settings scroll test source delta')
-    for path in sorted(SOURCE_PATHS | TERMINAL_PATHS | HARNESS_PATHS):
+    for path in sorted(SOURCE_PATHS | TERMINAL_PATHS | HARNESS_PATHS | REBOOT_FIX_PATHS):
         if path in TERMINAL_PATHS:
             require(digest(git('show', head + ':' + path)) == TERMINAL_SOURCE_SHA256[path],
                     'Pinned terminal diagnostic source changed: ' + path)
+            continue
+        if path in REBOOT_FIX_PATHS:
+            require(digest(git('show', head + ':' + path)) == REBOOT_FIX_SOURCE_SHA256[path],
+                    'Pinned reboot fix source changed: ' + path)
             continue
         reference = VERIFIED_HARNESS if path in HARNESS_PATHS else (
             VERIFIED_TESTS if path.endswith('.py') else VERIFIED_UI)
@@ -112,7 +123,7 @@ def delivery_scope():
     for label, revision in [('base', BASE), ('final', head)]:
         entries = git('ls-tree', '-rz', '--full-tree', revision).split(b'\0')
         entries = [e for e in entries if e and
-                   e.split(b'\t', 1)[1].decode() not in SOURCE_PATHS | TERMINAL_PATHS | HARNESS_PATHS | DELIVERY_PATHS]
+                   e.split(b'\t', 1)[1].decode() not in SOURCE_PATHS | TERMINAL_PATHS | HARNESS_PATHS | DELIVERY_PATHS | REBOOT_FIX_PATHS]
         trees[label] = digest(b'\0'.join(entries))
     require(trees['base'] == trees['final'], 'Objects outside pinned diagnostics/delivery changed')
     status = json.loads((ROOT / 'docs/review/candidate-status.json').read_text())
@@ -124,6 +135,7 @@ def delivery_scope():
         'verified_harness_commit': VERIFIED_HARNESS,
         'terminal_diagnostic_base': VERIFIED_TERMINAL_BASE,
         'terminal_diagnostic_source_sha256': TERMINAL_SOURCE_SHA256,
+        'reboot_fix_source_sha256': REBOOT_FIX_SOURCE_SHA256,
         'verified_firmware_commit': FIRMWARE_COMMIT, 'final_commit': head,
         'repository': REPOSITORY, 'ref': REF, 'changed_paths': sorted(changed),
         'source_tree_excluding_pinned_diagnostics_and_delivery': trees,
@@ -220,6 +232,7 @@ def verify(directory):
             and manifest['verified_harness_commit'] == VERIFIED_HARNESS
             and manifest['terminal_diagnostic_base'] == VERIFIED_TERMINAL_BASE
             and manifest['terminal_diagnostic_source_sha256'] == TERMINAL_SOURCE_SHA256
+            and manifest['reboot_fix_source_sha256'] == REBOOT_FIX_SOURCE_SHA256
             and manifest['verified_firmware_commit'] == FIRMWARE_COMMIT
             and manifest['repository'] == REPOSITORY and manifest['ref'] == REF
             and manifest['classification'] == 'terminal-session-diagnostics-test'
