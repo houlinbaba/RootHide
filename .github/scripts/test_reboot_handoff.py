@@ -176,6 +176,10 @@ def main():
     source = (ROOT / 'BaseBin/libjailbreak/src/util.c').read_text(encoding='utf-8')
     production = function(source, 'int cmd_create_handoff_pipe(') + '\n' + function(source, 'int cmd_wait_for_handoff(')
     app = (ROOT / 'Application/Dopamine/Jailbreak/DOEnvironmentManager.m').read_text(encoding='utf-8')
+    assert '#define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 1' in app
+    assert 'extern int posix_spawnattr_set_persona_np(' in app
+    assert 'extern int posix_spawnattr_set_persona_uid_np(' in app
+    assert 'extern int posix_spawnattr_set_persona_gid_np(' in app
     caller = function(app, '- (int)spawnJbctlAsRootWithArgs:')
     assert 'cmd_create_handoff_pipe(waitPipe)' in caller
     assert 'posix_spawn_file_actions_addclose(&actions, waitPipe[0])' in caller

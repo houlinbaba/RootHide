@@ -41,6 +41,13 @@ int reboot3(uint64_t flags, ...);
 CFPropertyListRef MGCopyAnswer(CFStringRef);
 extern char **environ;
 
+// These private spawn persona APIs are exported by iOS but are not declared
+// in the public iOS SDK headers used by the GitHub Actions build.
+#define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 1
+extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t * __restrict, uid_t, uint32_t);
+extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t * __restrict, uid_t);
+extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t * __restrict, uid_t);
+
 @implementation DOEnvironmentManager
 {
     struct rh_userspace_reboot _preparedUserspaceReboot;
