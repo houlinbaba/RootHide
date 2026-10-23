@@ -96,6 +96,8 @@ static int dopamine_drop_root(audit_token_t*t){(void)t;forbidden++;abort();}
 // Diagnostic FD behavior is exercised by test_terminal_diagnostics; reaching
 // that unrelated handler here must fail just like reaching get/drop-root.
 static int dopamine_diagnostic_log_fd(uint64_t selector,int *out){(void)selector;(void)out;forbidden++;abort();}
+// Keep the restart slot in the production table without exercising restart.
+static int dopamine_restart_action(const char *command,int *releaseFDOut){(void)command;(void)releaseFDOut;forbidden++;abort();}
 static int proc_credential_restore_self(void*p){(void)p;forbidden++;abort();}
 int dopamine_is_jailbroken(char **,xpc_object_t *);
 bool rh_image_uuid_for_address(const void*p,char out[37]){
@@ -125,7 +127,8 @@ static bool unchanged(struct rh_runtime_identity a,struct rh_runtime_identity b)
 }
 int main(void){
  assert(gDopamineDomain.actions[3].handler==(void*)dopamine_diagnostic_log_fd);
- assert(!gDopamineDomain.actions[4].handler);
+ assert(gDopamineDomain.actions[4].handler==(void*)dopamine_restart_action);
+ assert(!gDopamineDomain.actions[5].handler);
  struct rh_runtime_identity value={0},sentinel={0};sentinel.first_load=true;strcpy(sentinel.handler_uuid,"unchanged");
  assert(jbclient_dopamine_runtime_identity(&value)==RH_RUNTIME_MALFORMED); // phase not yet published
  dopamine_runtime_identity_set_first_load(true);
