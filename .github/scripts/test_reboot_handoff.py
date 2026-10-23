@@ -180,6 +180,9 @@ def main():
     assert 'cmd_create_handoff_pipe(waitPipe)' in caller
     assert 'posix_spawn_file_actions_addclose(&actions, waitPipe[0])' in caller
     assert 'posix_spawn_file_actions_addclose(&actions, waitPipe[1])' in caller
+    assert 'posix_spawnattr_set_persona_np(&attr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE)' in caller
+    assert 'posix_spawnattr_set_persona_uid_np(&attr, 0)' in caller
+    assert 'posix_spawnattr_set_persona_gid_np(&attr, 0)' in caller
     assert 'exec_cmd_roothide_spawn(&pid, argBuf[0], &actions, &attr, argBuf, environ)' in caller
     assert 'spawnResult = posix_spawn(&pid, argBuf[0]' not in caller
     assert caller.index('close(waitPipe[1]); waitPipe[1] = -1') < caller.index('cmd_wait_for_exit(pid)')

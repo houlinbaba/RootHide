@@ -360,6 +360,20 @@ extern char **environ;
         return r;
     }
 
+    // runAsRoot changes the current thread's effective credentials, but the
+    // App still has a mobile real uid. Launch jbctl with the same root persona
+    // used by exec_cmd_root so launchd accepts the privileged child.
+    r = posix_spawnattr_set_persona_np(&attr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
+    if (!r) r = posix_spawnattr_set_persona_uid_np(&attr, 0);
+    if (!r) r = posix_spawnattr_set_persona_gid_np(&attr, 0);
+    if (r != 0) {
+        posix_spawnattr_destroy(&attr);
+        posix_spawn_file_actions_destroy(&actions);
+        for (int y = 0; y < i; y++) free(argBuf[y]);
+        free(argBuf);
+        return r;
+    }
+
     int waitPipe[2] = {-1, -1};
 
     if (!needsLegacySolution) {

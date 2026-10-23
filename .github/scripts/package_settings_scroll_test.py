@@ -49,8 +49,8 @@ TERMINAL_PATHS = set(TERMINAL_SOURCE_SHA256)
 # This delivery also carries the narrowly scoped jbctl spawn fix. Pin both
 # files so the public diagnostic package cannot silently absorb unrelated code.
 REBOOT_FIX_SOURCE_SHA256 = {
-    "Application/Dopamine/Jailbreak/DOEnvironmentManager.m": "f60b730f21c284faff9d6a5cdf258c5df64dfe69c2bec629d7d5c942581965d9",
-    ".github/scripts/test_reboot_handoff.py": "89c1ea55e10e6e32d0f53dde0c2de576c1265e9c80feb27883aab11c09bb8b47"
+    "Application/Dopamine/Jailbreak/DOEnvironmentManager.m": "c5e650cbeda7d1af7731d000b407d23e66f7316b6ff02d249d8d28fc1d52fcf1",
+    ".github/scripts/test_reboot_handoff.py": "3f1c0fdb63606a009d3fa08051cceae85a0bcef66d4254384077fff64ce2618e"
 }
 REBOOT_FIX_PATHS = set(REBOOT_FIX_SOURCE_SHA256)
 FIRMWARE_COMMIT = '28829475b7f00c3c881ed03602020d0907d84eac'
