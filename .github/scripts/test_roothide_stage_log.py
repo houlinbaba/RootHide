@@ -147,7 +147,10 @@ def main():
     assert 'Userspace_Reboot_Failed_Format' in reboot
     assert 'restart.request command=%s log_open_result=%d' in reboot
     assert 'restart.return command=%s result=%d' in reboot
-    assert 'spawnJbctlAsRootWithArgs:@[command]' in reboot
+    assert 'prepared.pid > 0 ? rh_userspace_reboot_finish(&prepared)' in reboot
+    assert 'jbclient_dopamine_restart_action(command.UTF8String)' in reboot
+    assert reboot.index('restart.request command=') < reboot.index('jbclient_dopamine_restart_action(command.UTF8String)')
+    assert reboot.index('jbclient_dopamine_restart_action(command.UTF8String)') < reboot.index('restart.return command=')
     helper = method(environment, '- (int)spawnJbctlAsRootWithArgs:')
     assert '[self runAsRoot:^' in helper
     assert '"--waitfor"' in helper
