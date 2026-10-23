@@ -382,12 +382,25 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+      - name: Prepare versioned full build TIPA
+        id: full-tipa
+        if: success() && env.BUILD_MODE == 'full' && inputs.settings_scroll_delivery != true
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^DOPAMINE_VERSION ?= //p' Application/Makefile | head -n 1)"
+          test -n "$version"
+          short_sha="${GITHUB_SHA:0:7}"
+          filename="Dopamine_${version}-${short_sha}_roothide.tipa"
+          mkdir -p artifacts
+          cp Application/Dopamine.tipa "artifacts/$filename"
+          echo "artifact_name=$filename" >> "$GITHUB_OUTPUT"
+
       - name: Upload full build TIPA
         if: success() && env.BUILD_MODE == 'full' && inputs.settings_scroll_delivery != true
         uses: actions/upload-artifact@v4
         with:
-          name: dopamine-tipa-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: Application/Dopamine.tipa
+          name: ${{ steps.full-tipa.outputs.artifact_name }}
+          path: artifacts/Dopamine_*.tipa
           if-no-files-found: error
           retention-days: 3
 

@@ -42,13 +42,6 @@ extern int reboot(int howto);
 CFPropertyListRef MGCopyAnswer(CFStringRef);
 extern char **environ;
 
-// These private spawn persona APIs are exported by iOS but are not declared
-// in the public iOS SDK headers used by the GitHub Actions build.
-#define POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE 1
-extern int posix_spawnattr_set_persona_np(const posix_spawnattr_t * __restrict, uid_t, uint32_t);
-extern int posix_spawnattr_set_persona_uid_np(const posix_spawnattr_t * __restrict, uid_t);
-extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t * __restrict, uid_t);
-
 @implementation DOEnvironmentManager
 {
     struct rh_userspace_reboot _preparedUserspaceReboot;
@@ -368,20 +361,6 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t * __restri
         return r;
     }
 
-    // runAsRoot changes the current thread's effective credentials, but the
-    // App still has a mobile real uid. Launch jbctl with the same root persona
-    // used by exec_cmd_root so launchd accepts the privileged child.
-    r = posix_spawnattr_set_persona_np(&attr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
-    if (!r) r = posix_spawnattr_set_persona_uid_np(&attr, 0);
-    if (!r) r = posix_spawnattr_set_persona_gid_np(&attr, 0);
-    if (r != 0) {
-        posix_spawnattr_destroy(&attr);
-        posix_spawn_file_actions_destroy(&actions);
-        for (int y = 0; y < i; y++) free(argBuf[y]);
-        free(argBuf);
-        return r;
-    }
-
     int waitPipe[2] = {-1, -1};
 
     if (!needsLegacySolution) {
@@ -423,11 +402,11 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t * __restri
     int rootResult = [self runAsRoot:^{
         int sandboxResult = [self runUnsandboxed:^{
             roothide_stage_log("jbctl.posix_spawn.begin uid=%d euid=%d gid=%d", getuid(), geteuid(), getgid());
-            // Keep jbctl launches on the same RootHide path as other basebin
-            // commands. It trusts the executable and prepares the child
-            // before resuming it; --waitfor still holds the actual action
-            // until this method releases the handoff pipe below.
-            spawnResult = exec_cmd_roothide_spawn(&pid, argBuf[0], &actions, &attr, argBuf, environ);
+            // jbctl is already trusted in the installed basebin. Spawn it
+            // directly like RC7; the generic RootHide spawn wrapper forces a
+            // suspended child and can be rejected with EPERM from the iOS 17
+            // app credential context.
+            spawnResult = posix_spawn(&pid, argBuf[0], &actions, &attr, argBuf, environ);
             roothide_stage_log("jbctl.posix_spawn.end result=%d pid=%d", spawnResult, pid);
             if (needsLegacySolution && spawnResult == 0) {
                 // Compatibility only: Dopamine <3.0.5 jbctl has no --waitfor support.
