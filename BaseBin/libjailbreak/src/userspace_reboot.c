@@ -24,7 +24,16 @@ int rh_userspace_reboot_prepare(struct rh_userspace_reboot *request, const char 
         if (!result) result = posix_spawn_file_actions_addclose(&actions, fds[1]);
         char *argv[] = {(char *)jbctl, "reboot_userspace", "--waitfor", "3", NULL};
         pid_t pid = -1;
-        if (!result) result = posix_spawn(&pid, jbctl, &actions, NULL, argv, env);
+        // This child is prepared while the bootstrap still owns the root
+        // credentials. Match the RC7 handoff: start jbctl directly and let
+        // fd 3 hold it until the app has restored its credentials. The
+        // RootHide spawn wrapper is reserved for ordinary post-bootstrap
+        // launches, where child patching is required.
+        if (!result) {
+            roothide_stage_log("userspace_reboot.spawn.begin path=%s", jbctl);
+            result = posix_spawn(&pid, jbctl, &actions, NULL, argv, env);
+            roothide_stage_log("userspace_reboot.spawn.end result=%d pid=%d", result, pid);
+        }
         if (!result) *request = (struct rh_userspace_reboot){ .pid = pid, .releaseFD = fds[1] };
         posix_spawn_file_actions_destroy(&actions);
     }

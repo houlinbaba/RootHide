@@ -38,6 +38,7 @@
 #import <CoreServices/LSApplicationProxy.h>
 
 int reboot3(uint64_t flags, ...);
+extern int reboot(int howto);
 CFPropertyListRef MGCopyAnswer(CFStringRef);
 extern char **environ;
 
@@ -1487,11 +1488,32 @@ static BOOL DOPackageManagerBundleInvalidIsReinstallable(NSString *displayName, 
 
 - (void)reboot
 {
-    [self runAsRoot:^{
-        [self runUnsandboxed:^{
-            reboot3(0x8000000000000000, 0);
+    // A plain App process must not enter the device reboot syscall without
+    // an active jailbreak root context. Keep already-root callers working.
+    if ((geteuid() != 0 || getegid() != 0) && ![self isJailbroken]) return;
+    NSString *logPath = [[DOUIManager sharedInstance] rootHideStageLogPath];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        int logResult = roothide_stage_begin(logPath.fileSystemRepresentation, true);
+        roothide_stage_log("device_reboot.request log_open_result=%d", logResult);
+        [self runAsRoot:^{
+            [self runUnsandboxed:^{
+                roothide_stage_log("device_reboot.begin uid=%d euid=%d gid=%d", getuid(), geteuid(), getgid());
+                errno = 0;
+                int result = reboot3(0x8000000000000000, 0);
+                int rebootErrno = errno;
+                roothide_stage_log("device_reboot.reboot3 result=%d errno=%d", result, rebootErrno);
+                if (result != 0) {
+                    // Keep the legacy kernel reboot fallback for devices where
+                    // reboot3 is unavailable or rejected by launchd.
+                    sync();
+                    errno = 0;
+                    int fallbackResult = reboot(0);
+                    roothide_stage_log("device_reboot.fallback result=%d errno=%d", fallbackResult, errno);
+                }
+            }];
         }];
-    }];
+        roothide_stage_end();
+    });
 }
 
 
