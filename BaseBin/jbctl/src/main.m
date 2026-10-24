@@ -7,6 +7,7 @@
 #import "internal.h"
 
 #import <Foundation/Foundation.h>
+#include <stdio.h>
 #import <CoreServices/LSApplicationProxy.h>
 
 int reboot3(uint64_t flags, ...);
@@ -26,6 +27,12 @@ Available commands:\n\
 
 int main(int argc, char* argv[])
 {
+	// Very first observable point in main(). stderr is append-only redirected by
+	// the launchd restart path; bootstrap-activation path remains unchanged.
+	if (argc > 1 && argv[1] && !strcmp(argv[1], "reboot_userspace")) {
+		dprintf(STDERR_FILENO, "rh-reboot-trace child.main.enter pid=%d argc=%d uid=%d euid=%d\n",
+			getpid(), argc, getuid(), geteuid());
+	}
 	// D1 guard: validate argc before any argv indexing.
 	if (argc < 2) {
 		print_usage();
@@ -64,7 +71,11 @@ int main(int argc, char* argv[])
 					"jbctl.handoff.begin fd=%s uid=%d euid=%d",
 					argv[argc-1], getuid(), geteuid());
 			}
+			if (logRebootAction) dprintf(STDERR_FILENO,
+				"rh-reboot-trace child.handoff.begin pid=%d\n", getpid());
 			int r = cmd_wait_for_handoff(argv[argc-1]);
+			if (logRebootAction) dprintf(STDERR_FILENO,
+				"rh-reboot-trace child.handoff.end pid=%d result=%d\n", getpid(), r);
 			if (logRebootAction) {
 				roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
 					"jbctl.handoff.end result=%d uid=%d euid=%d",
@@ -81,7 +92,12 @@ int main(int argc, char* argv[])
 		roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
 			"jbctl.root_lookup.begin uid=%d euid=%d", getuid(), geteuid());
 	}
+	if (logRebootAction) dprintf(STDERR_FILENO,
+		"rh-reboot-trace child.root_lookup.begin pid=%d\n", getpid());
 	const char *rootPath = jbclient_get_jbroot();
+	if (logRebootAction) dprintf(STDERR_FILENO,
+		"rh-reboot-trace child.root_lookup.end pid=%d present=%d\n",
+		getpid(), rootPath != NULL);
 	if (logRebootAction) {
 		roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
 			"jbctl.root_lookup.end present=%d", rootPath != NULL);
@@ -186,9 +202,15 @@ int main(int argc, char* argv[])
 		roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
 			"jbctl.reboot3.begin uid=%d euid=%d gid=%d egid=%d",
 			getuid(), geteuid(), getgid(), getegid());
+		dprintf(STDERR_FILENO,
+			"rh-reboot-trace child.reboot3.begin pid=%d uid=%d euid=%d\n",
+			getpid(), getuid(), geteuid());
 		errno = 0;
 		int result = reboot3(RB2_USERREBOOT);
 		int savedErrno = errno;
+		dprintf(STDERR_FILENO,
+			"rh-reboot-trace child.reboot3.return pid=%d result=%d errno=%d\n",
+			getpid(), result, savedErrno);
 		roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
 			"jbctl.reboot3.return result=%d errno=%d", result, savedErrno);
 		errno = savedErrno;

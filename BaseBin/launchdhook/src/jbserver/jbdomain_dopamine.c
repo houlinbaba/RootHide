@@ -9,6 +9,8 @@
 #include <libjailbreak/runtime_identity.h>
 #include <stdatomic.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
 #include <spawn.h>
 #include <unistd.h>
 #include <libjailbreak/util.h>
@@ -222,12 +224,38 @@ static int dopamine_restart_action(const char *command, int *releaseFDOut)
 	attrReady = true;
 	char *argv[] = {(char *)jbctl, (char *)command, "--waitfor", "3", NULL};
 	pid_t pid = -1;
+	// Diagnostic-only: do not prevent the restart request if the log is inaccessible.
+	// Descriptor >= 10 cannot conflict with the --waitfor fd 3 handoff.
+	int traceFD = -1;
+	if (!strcmp(command, "reboot_userspace")) {
+		int opened = open(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+			O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0600);
+		if (opened >= 0) {
+			traceFD = fcntl(opened, F_DUPFD_CLOEXEC, 10);
+			close(opened);
+		}
+		if (traceFD >= 0) {
+			dprintf(traceFD, "rh-reboot-trace parent.spawn.begin command=%s pid=%d\n",
+				command, getpid());
+			// dup2 clears close-on-exec for the child's stderr, while the
+			// original CLOEXEC traceFD will not leak into the new image.
+			int traceAction = posix_spawn_file_actions_adddup2(&actions, traceFD, STDERR_FILENO);
+			if (traceAction != 0) {
+				dprintf(traceFD, "rh-reboot-trace parent.stderr_dup_failed err=%d\n", traceAction);
+			}
+		}
+	}
 	roothide_stage_log("dopamine.restart.spawn.begin command=%s", command);
 	// This handler runs in launchd. Its spawn hook performs the executable trust
 	// and child setup under launchd's root credentials; the App must not spawn
 	// this helper from its temporary effective-root credential.
 	result = posix_spawn(&pid, jbctl, &actions, &attr, argv, environ);
 	if (!result && pid <= 0) result = ECHILD;
+	if (traceFD >= 0) {
+		dprintf(traceFD, "rh-reboot-trace parent.spawn.end command=%s result=%d child=%d\n",
+			command, result, pid);
+		close(traceFD);
+	}
 	roothide_stage_log("dopamine.restart.spawn.end command=%s result=%d pid=%d", command, result, pid);
 	if (!result) {
 		*releaseFDOut = fds[1];
