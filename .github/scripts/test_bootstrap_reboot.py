@@ -148,6 +148,16 @@ extern int printf(const char *,...);
 typedef void *dispatch_queue_t;
 extern dispatch_queue_t dispatch_get_main_queue(void),dispatch_get_global_queue(int,unsigned long);
 extern void dispatch_async(dispatch_queue_t,void (^)(void));
+// Compile-only declarations for the App userspace reboot UI grace period.
+typedef unsigned long long rh_dispatch_time_t;
+#ifndef DISPATCH_TIME_NOW
+#define DISPATCH_TIME_NOW ((rh_dispatch_time_t)0)
+#endif
+#ifndef NSEC_PER_SEC
+#define NSEC_PER_SEC 1000000000ULL
+#endif
+extern rh_dispatch_time_t dispatch_time(rh_dispatch_time_t when, long long delta);
+extern void dispatch_after(rh_dispatch_time_t when, dispatch_queue_t queue, void (^block)(void));
 __attribute__((objc_root_class)) @interface NSObject @end
 @interface NSString : NSObject
 @property(readonly) const char *fileSystemRepresentation;
