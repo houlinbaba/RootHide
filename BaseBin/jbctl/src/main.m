@@ -1,6 +1,9 @@
 #import <libjailbreak/libjailbreak.h>
 #import <libjailbreak/jbclient_xpc.h>
 #import <libjailbreak/jbclient_mach.h>
+// This header is in the checked-in libjailbreak source tree, not the exported include directory.
+#import "../../libjailbreak/src/roothide_stage.h"
+#include <errno.h>
 #import "internal.h"
 
 #import <Foundation/Foundation.h>
@@ -51,11 +54,22 @@ int main(int argc, char* argv[])
 		setuid(0);
 	}
 
+	const bool logRebootAction = !strcmp(argv[1], "reboot_userspace");
 	if (argc > 2) {
 		if (!strcmp(argv[argc-2], "--waitfor")) {
 			// When the Dopamine app spawns jbctl it needs to clean up it's own ucred before jbctl does the requested action
 			// For this it will attach a pipe fd and write to it once the cleanup is done, so we need to wait until that write happens
+			if (logRebootAction) {
+				roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+					"jbctl.handoff.begin fd=%s uid=%d euid=%d",
+					argv[argc-1], getuid(), geteuid());
+			}
 			int r = cmd_wait_for_handoff(argv[argc-1]);
+			if (logRebootAction) {
+				roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+					"jbctl.handoff.end result=%d uid=%d euid=%d",
+					r, getuid(), geteuid());
+			}
 			if (r != 0) {
 				fprintf(stderr, "Cancelled action: App handoff failed (%d)\n", r);
 				return r;
@@ -63,7 +77,15 @@ int main(int argc, char* argv[])
 		}
 	}
 
+	if (logRebootAction) {
+		roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+			"jbctl.root_lookup.begin uid=%d euid=%d", getuid(), geteuid());
+	}
 	const char *rootPath = jbclient_get_jbroot();
+	if (logRebootAction) {
+		roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+			"jbctl.root_lookup.end present=%d", rootPath != NULL);
+	}
 	if (rootPath) {
 		gSystemInfo.jailbreakInfo.rootPath = strdup(rootPath);
 	}
@@ -161,7 +183,16 @@ int main(int argc, char* argv[])
 		// Give the app a final scheduling window after releasing --waitfor
 		// before launchd starts tearing userspace down.
 		usleep(10000);
-		return reboot3(RB2_USERREBOOT);
+		roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+			"jbctl.reboot3.begin uid=%d euid=%d gid=%d egid=%d",
+			getuid(), geteuid(), getgid(), getegid());
+		errno = 0;
+		int result = reboot3(RB2_USERREBOOT);
+		int savedErrno = errno;
+		roothide_stage_file_log(ROOTHIDE_JAILBREAKD_STAGE_LOG_PATH,
+			"jbctl.reboot3.return result=%d errno=%d", result, savedErrno);
+		errno = savedErrno;
+		return result;
 	}
 	else if (!strcmp(cmd, "respring")) {
 		usleep(10000);

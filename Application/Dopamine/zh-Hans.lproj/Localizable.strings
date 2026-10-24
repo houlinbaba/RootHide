@@ -159,3 +159,4 @@
 "Runtime_Identity_Busy" = "已有一个查询未返回，可能持续到 App 退出。不会继续创建等待任务。";
 "RootHide_Log_Export_Failed" = "无法生成 RootHide 诊断日志，请重试。";
 "Userspace_Reboot_Failed_Format" = "用户空间重启命令失败（返回值：%d）。请到设置中导出 RootHide 日志。";
+"Userspace_Reboot_Unconfirmed_Body" = "请求已返回，但应用仍在运行，尚未确认用户空间重启完成。如果设备没有发生重启，请到设置中导出 RootHide 日志，避免连续点击重启。";

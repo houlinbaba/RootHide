@@ -520,16 +520,35 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *attr, uid
         roothide_stage_log("restart.return command=%s result=%d", command.UTF8String, result);
         roothide_stage_end();
         dispatch_async(dispatch_get_main_queue(), ^{
-            requestInFlight = NO;
-            if (result != 0) {
-                UIViewController *presenter = [UIApplication sharedApplication].keyWindow.rootViewController;
-                while (presenter.presentedViewController) presenter = presenter.presentedViewController;
-                NSString *message = userspace ? [NSString stringWithFormat:DOLocalizedString(@"Userspace_Reboot_Failed_Format"), result] :
-                    [NSString stringWithFormat:@"%@ (%d)\n%@", [NSError errorWithDomain:NSPOSIXErrorDomain code:result userInfo:nil].localizedDescription, result, DOLocalizedString(@"Menu_Share_RootHide_Log")];
-                NSString *title = DOLocalizedString(userspace ? @"Menu_Reboot_Userspace_Title" : @"Menu_Restart_SpringBoard_Title");
-                UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
-                [alert addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_OK") style:UIAlertActionStyleDefault handler:nil]];
-                [presenter presentViewController:alert animated:YES completion:nil];
+            void (^finishRequest)(void) = ^{
+                requestInFlight = NO;
+                BOOL rebootUnconfirmed = userspace && result == 0;
+                if (result != 0 || rebootUnconfirmed) {
+                    UIViewController *presenter = [UIApplication sharedApplication].keyWindow.rootViewController;
+                    while (presenter.presentedViewController) presenter = presenter.presentedViewController;
+                    NSString *message;
+                    if (rebootUnconfirmed) {
+                        message = DOLocalizedString(@"Userspace_Reboot_Unconfirmed_Body");
+                    }
+                    else {
+                        message = userspace ? [NSString stringWithFormat:DOLocalizedString(@"Userspace_Reboot_Failed_Format"), result] :
+                            [NSString stringWithFormat:@"%@ (%d)\n%@", [NSError errorWithDomain:NSPOSIXErrorDomain code:result userInfo:nil].localizedDescription, result, DOLocalizedString(@"Menu_Share_RootHide_Log")];
+                    }
+                    NSString *title = DOLocalizedString(userspace ? @"Menu_Reboot_Userspace_Title" : @"Menu_Restart_SpringBoard_Title");
+                    UIAlertController *alert = [UIAlertController alertControllerWithTitle:title message:message preferredStyle:UIAlertControllerStyleAlert];
+                    [alert addAction:[UIAlertAction actionWithTitle:DOLocalizedString(@"Button_OK") style:UIAlertActionStyleDefault handler:nil]];
+                    [presenter presentViewController:alert animated:YES completion:nil];
+                }
+            };
+            if (userspace && result == 0) {
+                // A successful reply does not confirm a completed restart.
+                // Keep the gate closed during this UI grace period. If this
+                // process survives, report uncertainty instead of success.
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC),
+                               dispatch_get_main_queue(), finishRequest);
+            }
+            else {
+                finishRequest();
             }
         });
     });

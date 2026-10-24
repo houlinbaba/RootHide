@@ -162,3 +162,4 @@
 "Runtime_Identity_Busy" = "One query is still pending. It may remain pending until the App exits; additional workers will not be started.";
 "RootHide_Log_Export_Failed" = "Could not create the RootHide diagnostic export. Try again.";
 "Userspace_Reboot_Failed_Format" = "The userspace reboot command failed (result: %d). Open Settings and share the RootHide log.";
+"Userspace_Reboot_Unconfirmed_Body" = "The request returned, but this app is still running. The userspace restart has not been confirmed. If no restart occurred, open Settings and share the RootHide log. Avoid repeatedly tapping Restart.";
