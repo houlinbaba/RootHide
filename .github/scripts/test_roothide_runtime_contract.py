@@ -112,7 +112,7 @@ def main() -> None:
     require(dopamine_domain, "static int dopamine_restart_action(", "authenticated restart service handler")
     require(dopamine_domain, 'strcmp(command, "respring")', "fixed SpringBoard restart command")
     require(dopamine_domain, 'strcmp(command, "reboot_userspace")', "fixed userspace reboot command")
-    require(dopamine_domain, "posix_spawn(&pid, jbctl, &actions, &attr, argv, NULL)", "launchd-context restart spawn")
+    require(dopamine_domain, "posix_spawn(&pid, jbctl, &actions, &attr, argv, environ)", "launchd-context restart spawn")
     require(dopamine_domain, 'posix_spawn_file_actions_adddup2(&actions, fds[0], 3)', "restart handoff pipe wiring")
     require(roothide_root, "jbinfo(rootPath)", "RootHide runtime root provider")
     require(roothide_domain, "ROOTHIDE_MAX_PREFERRED_ARCHS", "bounded preferred architecture count")

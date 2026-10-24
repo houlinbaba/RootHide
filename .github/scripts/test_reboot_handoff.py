@@ -187,7 +187,7 @@ def main():
     assert 'JBS_DOPAMINE_RESTART_ACTION' in domains
     assert 'jbclient_dopamine_restart_action' in client_header
     assert 'jbclient_dopamine_restart_action(command.UTF8String)' in app_action
-    assert 'posix_spawn(&pid, jbctl, &actions, &attr, argv, NULL)' in service
+    assert 'posix_spawn(&pid, jbctl, &actions, &attr, argv, environ)' in service
     assert 'posix_spawn_file_actions_adddup2(&actions, fds[0], 3)' in service
     assert '"respring"' in service and '"reboot_userspace"' in service
     assert 'xpc_dictionary_dup_fd(reply, "release-fd")' in request

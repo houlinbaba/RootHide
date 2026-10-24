@@ -127,21 +127,25 @@ xpc_object_t jbserver_xpc_send(uint64_t domain, uint64_t action, xpc_object_t xa
 char *jbclient_get_jbroot(void)
 {
 	static char rootPath[PATH_MAX] = { 0 };
-	static dispatch_once_t dot;
+	static pthread_mutex_t rootLock = PTHREAD_MUTEX_INITIALIZER;
 
-	dispatch_once(&dot, ^{
+	// Cache a valid root for the lifetime of this process, but do not cache
+	// a transient bootstrap/XPC failure. The old dispatch_once permanently
+	// returned NULL when launchd was not yet ready on the first attempt.
+	pthread_mutex_lock(&rootLock);
+	if (rootPath[0] == '\0') {
 		xpc_object_t xreply = jbserver_xpc_send(JBS_DOMAIN_SYSTEMWIDE, JBS_SYSTEMWIDE_GET_JBROOT, NULL);
 		if (xreply) {
 			const char *replyRootPath = xpc_dictionary_get_string(xreply, "root-path");
-			if (replyRootPath) {
+			if (replyRootPath && replyRootPath[0] == '/') {
 				strlcpy(&rootPath[0], replyRootPath, sizeof(rootPath));
 			}
 			xpc_release(xreply);
 		}
-	});
-
-	if (rootPath[0] == '\0') return NULL;
-	return (char *)&rootPath[0];
+	}
+	bool available = rootPath[0] != '\0';
+	pthread_mutex_unlock(&rootLock);
+	return available ? rootPath : NULL;
 }
 
 char *jbclient_get_boot_uuid(void)

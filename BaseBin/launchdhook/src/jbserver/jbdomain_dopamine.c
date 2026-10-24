@@ -15,6 +15,9 @@
 #include <libjailbreak/roothide_stage.h>
 #include <libjailbreak/diagnostic_log.h>
 
+// The helper uses the explicit environment supplied to posix_spawn.
+extern char **environ;
+
 static char *read_file_to_string(const char *path) {
     FILE *fp = fopen(path, "rb");
     if (!fp) {
@@ -223,7 +226,7 @@ static int dopamine_restart_action(const char *command, int *releaseFDOut)
 	// This handler runs in launchd. Its spawn hook performs the executable trust
 	// and child setup under launchd's root credentials; the App must not spawn
 	// this helper from its temporary effective-root credential.
-	result = posix_spawn(&pid, jbctl, &actions, &attr, argv, NULL);
+	result = posix_spawn(&pid, jbctl, &actions, &attr, argv, environ);
 	if (!result && pid <= 0) result = ECHILD;
 	roothide_stage_log("dopamine.restart.spawn.end command=%s result=%d pid=%d", command, result, pid);
 	if (!result) {
