@@ -139,11 +139,23 @@ static int fake_path_set_mounted(bool mounted, const char *rawPath)
 	if (![path isEqualToString:standardPath] || ![path hasPrefix:@"/"] || [path isEqualToString:@"/"]) return EINVAL;
 
 	if (mounted == fake_path_is_mounted(rawPath)) return 0;
-	if (!mounted) return unmount(rawPath, MNT_FORCE);
+	if (!mounted) {
+		if (unmount(rawPath, MNT_FORCE) == 0) return 0;
+		int savedErrno = errno;
+		JBLogError("[fake_path] unmount failed: path=%s errno=%d", rawPath, savedErrno);
+		return savedErrno ?: EIO;
+	}
 
 	int r = fake_path_prepare(path);
-	if (r != 0) return r;
-	return mount("bindfs", rawPath, MNT_RDONLY, (void *)fake_path_storage_path(path).fileSystemRepresentation);
+	if (r != 0) {
+		JBLogError("[fake_path] prepare failed: path=%s error=%d", rawPath, r);
+		return r;
+	}
+	const char *storagePath = fake_path_storage_path(path).fileSystemRepresentation;
+	if (mount("bindfs", rawPath, MNT_RDONLY, (void *)storagePath) == 0) return 0;
+	int savedErrno = errno;
+	JBLogError("[fake_path] mount failed: path=%s source=%s errno=%d", rawPath, storagePath, savedErrno);
+	return savedErrno ?: EIO;
 }
 
 int jbctl_handle_internal(const char *command, int argc, char* argv[])
@@ -264,7 +276,11 @@ JBLogDebug("jbctl startup: refreshing jailbroken apps ...");
 		uint64_t credBackup = 0;
 		if (jbclient_root_steal_ucred(0, &credBackup) != 0) return EPERM;
 		int r = fake_path_set_mounted(!strcmp(command, "mount"), argv[1]);
-		jbclient_root_steal_ucred(credBackup, NULL);
+		int restoreResult = jbclient_root_steal_ucred(credBackup, NULL);
+		if (restoreResult != 0) {
+			JBLogError("[fake_path] failed to restore credentials after %s: result=%d", command, restoreResult);
+			if (r == 0) return EPERM;
+		}
 		return r;
 	}
 	return -1;
