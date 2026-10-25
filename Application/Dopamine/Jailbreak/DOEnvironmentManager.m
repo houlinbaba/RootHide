@@ -405,27 +405,15 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *attr, uid
         }
     }
 
-    // iOS 17 can reject a direct spawn from the relaunched app even after
-    // RootHide grants euid 0. Use the root persona and RootHide's trusted
-    // spawn path so jbctl receives the same execution context as RC7.
-    r = posix_spawnattr_set_persona_np(&attr, 99, POSIX_SPAWN_PERSONA_FLAGS_OVERRIDE);
-    if (!r) r = posix_spawnattr_set_persona_uid_np(&attr, 0);
-    if (!r) r = posix_spawnattr_set_persona_gid_np(&attr, 0);
-    if (r != 0) {
-        if (waitPipe[0] >= 0) close(waitPipe[0]);
-        if (waitPipe[1] >= 0) close(waitPipe[1]);
-        posix_spawnattr_destroy(&attr);
-        posix_spawn_file_actions_destroy(&actions);
-        for (int y = 0; y < i; y++) free(argBuf[y]);
-        free(argBuf);
-        return r;
-    }
+    // Official RootHide Dopamine 3.x (e180427) launches jbctl directly
+    // under the App's temporary root/unsandbox scope, without a persona.
+    // A/B experiment: change only this spawn site; preserve handoff gating.
 
     int rootResult = [self runAsRoot:^{
         int sandboxResult = [self runUnsandboxed:^{
             roothide_stage_log("jbctl.posix_spawn.begin uid=%d euid=%d gid=%d", getuid(), geteuid(), getgid());
-            spawnResult = exec_cmd_roothide_spawn(&pid, argBuf[0], &actions, &attr, argBuf, environ);
-            roothide_stage_log("jbctl.roothide_spawn.end result=%d pid=%d", spawnResult, pid);
+            spawnResult = posix_spawn(&pid, argBuf[0], &actions, &attr, argBuf, environ);
+            roothide_stage_log("jbctl.posix_spawn.end result=%d pid=%d", spawnResult, pid);
             if (needsLegacySolution && spawnResult == 0) {
                 // Compatibility only: Dopamine <3.0.5 jbctl has no --waitfor support.
                 kill(pid, SIGCONT);
