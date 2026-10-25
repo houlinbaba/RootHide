@@ -80,8 +80,9 @@ static int mach_msg(mach_msg_header_t *hdr, int opts, unsigned int snd, unsigned
 }
 static kern_return_t mach_port_mod_refs(int task, mach_port_t p, int right, int refs) { (void)task; assert(p==404 && right==MACH_PORT_RIGHT_SEND && refs==1); retained_count++; return failure(8); }
 static void mach_msg_destroy(mach_msg_header_t *hdr) { assert(hdr); msg_destroy_count++; }
-static int kill(pid_t pid, int sig) { assert(pid==123 && sig==SIGKILL); killed_count++; return 0; }
+static int fake_kill(pid_t pid, int sig) { assert(pid==123 && sig==SIGKILL); killed_count++; return 0; }
 
+#define kill fake_kill
 INSERT_FUNCTION
 
 static void reset_counts(int step) { fail_step=step; port_destroy_count=attr_destroy_count=spawned_count=killed_count=msg_destroy_count=retained_count=checked_size_count=0; }
