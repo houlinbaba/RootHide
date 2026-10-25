@@ -149,11 +149,12 @@ void server_loop(mach_port_t port)
 		uint32_t hookCount = 0;
 		if (hooksSize > 0) {
 			for (uint32_t idx = 0; idx < hooksSize;) {
-				uint32_t remainingBytes = hooksSize - idx;
+				size_t remainingBytes = hooksSize - idx;
 				if (remainingBytes < sizeof(struct hookd_encoded_hook)) break;
 				struct hookd_encoded_hook *hook = (struct hookd_encoded_hook *)&hooksStart[idx];
+				// Validate before adding: a 64-bit dataSize can wrap hookSize to zero.
+				if (hook->dataSize > remainingBytes - sizeof(*hook)) break;
 				size_t hookSize = sizeof(*hook) + (size_t)hook->dataSize;
-				if (hookSize > remainingBytes) break;
 
 				int64_t *expanded = realloc(hookResults, sizeof(int64_t) * (hookCount + 1));
 				if (!expanded) {

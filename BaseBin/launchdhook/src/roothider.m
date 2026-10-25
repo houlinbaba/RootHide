@@ -425,6 +425,9 @@ int roothide_launchd___posix_spawn_prehook(pid_t *restrict pidp, const char *res
 		else
 		{
 			char **envc = envbuf_mutcopy((const char **)envp);
+			// A non-NULL input must not be silently replaced by a NULL
+			// environment when envbuf_mutcopy runs out of memory.
+			if (envp && !envc) return ENOMEM;
 
 			//choicy may set these 
 			envbuf_unsetenv(&envc, "_SafeMode");
