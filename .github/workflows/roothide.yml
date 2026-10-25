@@ -95,6 +95,10 @@ jobs:
         run: |
           set -euo pipefail
           git clone --recursive https://github.com/roothide/theos.git "$THEOS"
+          # THEOS_COMMIT is a diverged roothide commit not reachable from master,
+          # so a plain clone does not contain it and checkout fails with
+          # "fatal: unable to read tree". Fetch that exact commit first.
+          git -C "$THEOS" fetch origin "$THEOS_COMMIT"
           git -C "$THEOS" checkout --detach "$THEOS_COMMIT"
           git -C "$THEOS" submodule update --init --recursive
 
