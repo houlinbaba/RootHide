@@ -512,11 +512,20 @@ extern int posix_spawnattr_set_persona_gid_np(const posix_spawnattr_t *attr, uid
         roothide_stage_log("restart.request command=%s log_open_result=%d", command.UTF8String, logResult);
         roothide_stage_log("restart.spawn.begin command=%s uid=%d euid=%d gid=%d",
                            command.UTF8String, getuid(), geteuid(), getgid());
-        // Initial activation prepared this child while bootstrap still had
-        // root. Otherwise ask the authenticated RootHide service to prepare
-        // jbctl, then release it only after the App receives the XPC reply.
-        int result = prepared.pid > 0 ? rh_userspace_reboot_finish(&prepared) :
-                     jbclient_dopamine_restart_action(command.UTF8String);
+        // Preserve the first-activation prepared child. Compare only the
+        // post-activation userspace reboot path against upstream Dopamine:
+        // spawn jbctl under the App's temporary root scope and release the
+        // handoff after the scope is restored. Do not fall back to RPC here:
+        // a second restart attempt would invalidate the A/B test.
+        int result;
+        if (prepared.pid > 0) {
+            result = rh_userspace_reboot_finish(&prepared);
+        } else if (userspace) {
+            roothide_stage_log("restart.path command=reboot_userspace mode=app_direct");
+            result = [self spawnJbctlAsRootWithArgs:@[@"reboot_userspace"]];
+        } else {
+            result = jbclient_dopamine_restart_action(command.UTF8String);
+        }
         roothide_stage_log("restart.return command=%s result=%d", command.UTF8String, result);
         roothide_stage_end();
         dispatch_async(dispatch_get_main_queue(), ^{

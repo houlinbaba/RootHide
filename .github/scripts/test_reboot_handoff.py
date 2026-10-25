@@ -192,7 +192,14 @@ def main():
     assert '"respring"' in service and '"reboot_userspace"' in service
     assert 'xpc_dictionary_dup_fd(reply, "release-fd")' in request
     assert "char token = 'w'" in request
-    assert app_action.index('jbclient_dopamine_restart_action(command.UTF8String)') > app_action.index('prepared.pid > 0 ?')
+    # A/B: first activation retains its prepared child; active userspace uses
+    # the existing direct-spawn helper; Respring remains on the service RPC.
+    prepared_branch = app_action.index('if (prepared.pid > 0) {')
+    direct_branch = app_action.index('} else if (userspace) {', prepared_branch)
+    rpc_branch = app_action.index('} else {', direct_branch)
+    assert prepared_branch < app_action.index('result = rh_userspace_reboot_finish(&prepared);') < direct_branch
+    assert direct_branch < app_action.index('result = [self spawnJbctlAsRootWithArgs:@[@"reboot_userspace"]];') < rpc_branch
+    assert rpc_branch < app_action.index('result = jbclient_dopamine_restart_action(command.UTF8String);')
     # Restart is now requested through the app-authenticated launchd service,
     # not through the App's temporary euid=0 spawn path.
     jbctl = (ROOT / 'BaseBin/jbctl/src/main.m').read_text(encoding='utf-8')
