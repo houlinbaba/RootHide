@@ -4,6 +4,7 @@ from pathlib import Path
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 
 root = Path(__file__).resolve().parents[2]
@@ -29,5 +30,9 @@ with tempfile.TemporaryDirectory(prefix="rc7-phase4-") as tmp:
     subprocess.run([compiler, "-std=c11", "-Wall", "-Wextra", "-Werror", "-g", "-O1",
                     "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-I", str(include),
                     str(script), "-o", str(exe)], check=True)
-    subprocess.run([str(exe)], env={**os.environ,"ASAN_OPTIONS":"detect_leaks=1:halt_on_error=1"}, check=True)
+    # Darwin ASan does not support LeakSanitizer/detect_leaks. Keep ASan/UBSan active.
+    asan_options = "halt_on_error=1"
+    if sys.platform.startswith("linux"):
+        asan_options += ":detect_leaks=1"
+    subprocess.run([str(exe)], env={**os.environ, "ASAN_OPTIONS": asan_options}, check=True)
 print("PASS production source and caller contract checks")

@@ -6,6 +6,7 @@ from pathlib import Path
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import textwrap
 
@@ -208,6 +209,10 @@ with tempfile.TemporaryDirectory(prefix='rc7trust_') as td:
                    '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
                    str(harness), '-o', str(binary)]
     subprocess.run(compile_cmd, check=True, capture_output=True, text=True)
+    # Darwin ASan does not support LeakSanitizer/detect_leaks. Keep ASan/UBSan active.
+    asan_options = 'halt_on_error=1'
+    if sys.platform.startswith('linux'):
+        asan_options += ':detect_leaks=1'
     proc = subprocess.run([str(binary)], check=True, capture_output=True, text=True,
-                          env={**os.environ, 'ASAN_OPTIONS': 'detect_leaks=1:halt_on_error=1'})
+                          env={**os.environ, 'ASAN_OPTIONS': asan_options})
     print(proc.stdout.strip())
