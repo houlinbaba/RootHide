@@ -147,7 +147,15 @@ def main():
     assert 'Userspace_Reboot_Failed_Format' in reboot
     assert 'restart.request command=%s log_open_result=%d' in reboot
     assert 'restart.return command=%s result=%d' in reboot
-    assert 'prepared.pid > 0 ? rh_userspace_reboot_finish(&prepared)' in reboot
+    # A/B userspace reboot: prepared activation child, then App direct-spawn;
+    # Respring alone continues through the existing authenticated service RPC.
+    stage_prepared = reboot.index('if (prepared.pid > 0) {')
+    stage_finish = reboot.index('result = rh_userspace_reboot_finish(&prepared);', stage_prepared)
+    stage_active = reboot.index('} else if (userspace) {', stage_finish)
+    stage_direct = reboot.index('result = [self spawnJbctlAsRootWithArgs:@[@"reboot_userspace"]];', stage_active)
+    stage_rpc = reboot.index('} else {', stage_direct)
+    stage_rpc_call = reboot.index('result = jbclient_dopamine_restart_action(command.UTF8String);', stage_rpc)
+    assert stage_prepared < stage_finish < stage_active < stage_direct < stage_rpc < stage_rpc_call
     assert 'jbclient_dopamine_restart_action(command.UTF8String)' in reboot
     assert reboot.index('restart.request command=') < reboot.index('jbclient_dopamine_restart_action(command.UTF8String)')
     assert reboot.index('jbclient_dopamine_restart_action(command.UTF8String)') < reboot.index('restart.return command=')
