@@ -110,7 +110,10 @@ jobs:
         if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
-          git clone --recursive https://github.com/roothide/theos.git "$THEOS"
+          git clone https://github.com/roothide/theos.git "$THEOS"
+          # Fetch the pinned commit explicitly: it may not be in the default branch history.
+          git -C "$THEOS" fetch --no-tags origin "$THEOS_COMMIT"
+          git -C "$THEOS" cat-file -e "${THEOS_COMMIT}^{commit}"
           git -C "$THEOS" checkout --detach "$THEOS_COMMIT"
           git -C "$THEOS" submodule update --init --recursive
 
@@ -137,6 +140,9 @@ jobs:
           set -euo pipefail
           source_dir="$RUNNER_TEMP/trustcache"
           git clone https://github.com/CRKatri/trustcache.git "$source_dir"
+          # The pinned commit must be available even if it is not on the default branch.
+          git -C "$source_dir" fetch --no-tags origin "$TRUSTCACHE_COMMIT"
+          git -C "$source_dir" cat-file -e "${TRUSTCACHE_COMMIT}^{commit}"
           git -C "$source_dir" checkout --detach "$TRUSTCACHE_COMMIT"
 
           openssl_prefix="$(brew --prefix openssl@3)"
