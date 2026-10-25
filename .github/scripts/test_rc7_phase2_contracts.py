@@ -23,10 +23,9 @@ header = r'''
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
-#define SIGKILL 9
-#define SIGCONT 18
+#include <signal.h>
+#include <sys/types.h>
 #define JBLogError(...) ((void)0)
-typedef int pid_t;
 static int unrestrict_fail, patch_enabled, resume_fail;
 static int seen_signals[4], signal_count, wait_count;
 static int proc_patch_dyld;
