@@ -310,7 +310,19 @@ def check_wiring(app, env):
     assert '[self performRestartAction:@"reboot_userspace"]' in function(env, '- (void)rebootUserspace')
     assert '[self performRestartAction:@"respring"]' in function(env, '- (void)respring')
     reboot = function(env, '- (void)performRestartAction:')
-    assert 'prepared.pid > 0 ? rh_userspace_reboot_finish(&prepared)' in reboot
+    # A/B contract: the initial activation child is finished exactly once;
+    # only an already active userspace restart uses App direct-spawn;
+    # Respring retains the authenticated service RPC. Preserve branch order.
+    prepared_branch = reboot.index('if (prepared.pid > 0) {')
+    prepared_finish = reboot.index('result = rh_userspace_reboot_finish(&prepared);', prepared_branch)
+    direct_branch = reboot.index('} else if (userspace) {', prepared_finish)
+    direct_spawn = reboot.index('result = [self spawnJbctlAsRootWithArgs:@[@"reboot_userspace"]];', direct_branch)
+    respring_branch = reboot.index('} else {', direct_spawn)
+    rpc_call = reboot.index('result = jbclient_dopamine_restart_action(command.UTF8String);', respring_branch)
+    assert prepared_branch < prepared_finish < direct_branch < direct_spawn < respring_branch < rpc_call
+    assert reboot.count('result = rh_userspace_reboot_finish(&prepared);') == 1
+    assert reboot.count('result = [self spawnJbctlAsRootWithArgs:@[@"reboot_userspace"]];') == 1
+    assert reboot.count('result = jbclient_dopamine_restart_action(command.UTF8String);') == 1
     prepare = function(env, '- (int)prepareBootstrapUserspaceReboot')
     assert 'runAsRoot' not in prepare and 'runUnsandboxed' not in prepare
     spawn = function(env, '- (int)spawnJbctlAsRootWithArgs:')
