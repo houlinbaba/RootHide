@@ -49,6 +49,11 @@ xpc_object_t xpc_dictionary_get_value_hook(xpc_object_t xdict, const char *key)
 				}
 			}
 */
+
+			// mtmergeprops reloads the touch controller firmware on the initial boot.
+			// Repeating it after a userspace reboot may disable some replacement touchscreens.
+			// Backported from Dopamine 3.0.12 (9ba0209).
+			xpc_dictionary_set_value(origXvalue, "/System/Library/LaunchDaemons/com.apple.mtmergeprops.plist", NULL);
 		}
 	}
 	else if (!strcmp(key, "Paths")) {

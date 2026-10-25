@@ -75,7 +75,9 @@ if (!pid) pid = &pidval;
 	int r = __posix_spawn_orig(pid, path, desc, argv, envp);
 	crashreporter_resume(key);
 
-JBLogDebug("__posix_spawn ret=%d pid=%d", r, *pid);
+// posix_spawn does not guarantee that the PID output was written on failure.
+// A caller-provided pointer may even be unreadable when the call fails.
+JBLogDebug("__posix_spawn ret=%d pid=%d", r, (r == 0) ? *pid : 0);
 
 	return r;
 }
@@ -174,7 +176,8 @@ int __posix_spawn_hook(pid_t *restrict pid, const char *restrict path,
 	// We can't support injection into processes that get spawned before the launchd XPC server is up
 	// (Technically we could but there is little reason to, since it requires additional work)
 	if (gInEarlyBoot) {
-		if (!strcmp(path, "/usr/libexec/xpcproxy")) {
+		// Invalid spawn calls must not dereference a NULL path in PID 1.
+		if (path && !strcmp(path, "/usr/libexec/xpcproxy")) {
 			// The spawned process being xpcproxy indicates that the launchd XPC server is up
 			// All processes spawned including this one should be injected into
 			early_boot_done();

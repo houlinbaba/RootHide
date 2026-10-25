@@ -283,8 +283,16 @@ int roothide_systemhook___posix_spawn_posthook(pid_t *restrict pidp, const char 
 	// on some devices dyldhook may fail due to vm_protect(VM_PROT_READ|VM_PROT_WRITE), 2, (os/kern) protection failure in dsc::__DATA_CONST:__const, 
 	// so we need to disable dyld-in-cache here. (or we can use VM_PROT_READ|VM_PROT_WRITE|VM_PROT_COPY)
 	char **envc = envbuf_mutcopy((const char **)envp);
-	if(envbuf_getenv(envc, "DYLD_INSERT_LIBRARIES")) {
-		envbuf_setenv(&envc, "DYLD_IN_CACHE", "0");
+	bool envPrepared = !envp || envc != NULL;
+	if (envPrepared && envbuf_getenv((const char **)envc, "DYLD_INSERT_LIBRARIES")) {
+		envPrepared = envbuf_setenv(&envc, "DYLD_IN_CACHE", "0");
+	}
+	if (!envPrepared) {
+		// Do not spawn a child with an incomplete injection environment.
+		envbuf_free(envc);
+		posix_spawnattr_setflags(attrp, flags);
+		if (patch_exec) jbdSpawnExecCancel(path);
+		return ENOMEM;
 	}
 
 	if(!jbclient_dyld_patch_enabled())
@@ -371,13 +379,22 @@ int roothide_systemhook___execve_posthook(const char *path, char *const argv[], 
 	while(!traced) usleep(10*1000);
 
 	char **envc = envbuf_mutcopy((const char **)envp);
-	if(envbuf_getenv(envc, "DYLD_INSERT_LIBRARIES")) {
-		envbuf_setenv(&envc, "DYLD_IN_CACHE", "0");
+	bool envPrepared = !envp || envc != NULL;
+	if (envPrepared && envbuf_getenv((const char **)envc, "DYLD_INSERT_LIBRARIES")) {
+		envPrepared = envbuf_setenv(&envc, "DYLD_IN_CACHE", "0");
 	}
-	
-	int ret = __execve_orig(path, argv, envc);
-	int olderr = errno;
-	
+
+	int ret;
+	int olderr;
+	if (!envPrepared) {
+		// Still cancel the active trace before reporting a failed execve.
+		ret = -1;
+		olderr = ENOMEM;
+	} else {
+		ret = __execve_orig(path, argv, envc);
+		olderr = errno;
+	}
+
 	envbuf_free(envc);
 
 	// exec* should never return if successful

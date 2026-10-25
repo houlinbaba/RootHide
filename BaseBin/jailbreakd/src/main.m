@@ -99,11 +99,19 @@ int main(int argc, char* argv[])
 	
 			if(unrestrict(pid, proc_patch_dyld, false) != 0) {
 				JBLogError("Failed to unrestrict process %d", pid);
+				// The child was spawned suspended: never leave it stranded on failure.
+				kill(pid, SIGKILL);
+				waitpid(pid, NULL, 0);
 				return 5;
 			}
 
 			if(dyld_patch_enabled()) {
-				kill(pid, SIGCONT);
+				if (kill(pid, SIGCONT) != 0) {
+					JBLogError("Failed to resume respawned jailbreakd %d", pid);
+					kill(pid, SIGKILL);
+					waitpid(pid, NULL, 0);
+					return 5;
+				}
 				return 0;
 			} else {
 				kill(pid, SIGKILL);

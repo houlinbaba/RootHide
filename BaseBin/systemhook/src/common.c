@@ -11,6 +11,8 @@
 #include <dlfcn.h>
 #include <os/log.h>
 #include "common/envbuf.h"
+#include <errno.h>
+#include <stdint.h>
 #include "private.h"
 #include <libjailbreak/jbclient_xpc.h>
 #include <libjailbreak/jbserver_domains.h>
@@ -50,6 +52,7 @@ bool string_has_suffix(const char* str, const char* suffix)
 void string_enumerate_components(const char *string, const char *separator, void (^enumBlock)(const char *pathString, bool *stop))
 {
 	char *stringCopy = strdup(string);
+	if (!stringCopy) return;
 	char *savePtr = NULL;
 	char *curString = strtok_r(stringCopy, separator, &savePtr);
 	while (curString != NULL) {
@@ -212,16 +215,32 @@ static int spawn_exec_hook_common(const char *path,
 		// the state we want to be in is not the state we are in right now
 
 		char **envc = envbuf_mutcopy((const char **)envp);
+		if (envp && !envc) return ENOMEM;
 
 		if (shouldInsertJBEnv) {
 			if (!systemHookAlreadyInserted) {
-				char newLibraryInsert[strlen(HOOK_DYLIB_PATH) + (existingLibraryInserts ? (strlen(existingLibraryInserts) + 1) : 0) + 1];
+				size_t pathLen = strlen(HOOK_DYLIB_PATH);
+				size_t extraLen = existingLibraryInserts ? strlen(existingLibraryInserts) : 0;
+				if (extraLen > SIZE_MAX - pathLen - 2) {
+					envbuf_free(envc);
+					return ENOMEM;
+				}
+				char *newLibraryInsert = malloc(pathLen + extraLen + 2);
+				if (!newLibraryInsert) {
+					envbuf_free(envc);
+					return ENOMEM;
+				}
 				strcpy(newLibraryInsert, HOOK_DYLIB_PATH);
 				if (existingLibraryInserts) {
 					strcat(newLibraryInsert, ":");
 					strcat(newLibraryInsert, existingLibraryInserts);
 				}
-				envbuf_setenv(&envc, "DYLD_INSERT_LIBRARIES", newLibraryInsert);
+				bool updated = envbuf_setenv(&envc, "DYLD_INSERT_LIBRARIES", newLibraryInsert);
+				free(newLibraryInsert);
+				if (!updated) {
+					envbuf_free(envc);
+					return ENOMEM;
+				}
 			}
 		}
 		else {
@@ -231,6 +250,10 @@ static int spawn_exec_hook_common(const char *path,
 				}
 				else {
 					char *newLibraryInsert = malloc(strlen(existingLibraryInserts)+1);
+					if (!newLibraryInsert) {
+						 envbuf_free(envc);
+						 return ENOMEM;
+					}
 					newLibraryInsert[0] = '\0';
 
 					__block bool first = true;
@@ -246,9 +269,12 @@ static int spawn_exec_hook_common(const char *path,
 							}
 						}
 					});
-					envbuf_setenv(&envc, "DYLD_INSERT_LIBRARIES", newLibraryInsert);
-
+					bool updated = envbuf_setenv(&envc, "DYLD_INSERT_LIBRARIES", newLibraryInsert);
 					free(newLibraryInsert);
+					if (!updated) {
+						envbuf_free(envc);
+						return ENOMEM;
+					}
 				}
 			}
 			envbuf_unsetenv(&envc, "_SafeMode");
@@ -307,5 +333,9 @@ int execve_hook_shared(const char *path,
 		return execve_orig(path, argv, envp_patched);
 	});
 
+	if (r == ENOMEM) {
+		errno = ENOMEM;
+		return -1;
+	}
 	return r;
 }

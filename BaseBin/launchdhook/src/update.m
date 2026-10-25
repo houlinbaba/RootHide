@@ -31,7 +31,10 @@ int jbupdate_basebin(const char *basebinTarPath)
 
 		// Update basebin trustcache
 		NSString *trustcachePath = [tmpBasebinPath stringByAppendingPathComponent:@"basebin.tc"];
-		if (![[NSFileManager defaultManager] fileExistsAtPath:trustcachePath]) return 3;
+		if (![[NSFileManager defaultManager] fileExistsAtPath:trustcachePath]) {
+			[[NSFileManager defaultManager] removeItemAtPath:tmpExtractionPath error:nil];
+			return 3;
+		}
 /*
 		trustcache_file_v1 *basebinTcFile = NULL;
 		if (trustcache_file_build_from_path(trustcachePath.fileSystemRepresentation, &basebinTcFile) != 0) {
@@ -49,21 +52,31 @@ int jbupdate_basebin(const char *basebinTarPath)
 			[[NSFileManager defaultManager] removeItemAtPath:tmpExtractionPath error:nil];
 			return 5;
 		}
-		else {
-			[[NSFileManager defaultManager] removeItemAtPath:trustcachePath error:nil];
-		}
 
 		// Replace basebin content
-		NSArray *newBasebinContents = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:tmpBasebinPath error:nil];
+		NSFileManager *fileManager = [NSFileManager defaultManager];
+		NSError *fileError = nil;
+		NSArray *newBasebinContents = [fileManager contentsOfDirectoryAtPath:tmpBasebinPath error:&fileError];
+		if (!newBasebinContents) {
+			[fileManager removeItemAtPath:tmpExtractionPath error:nil];
+			return 7; // Unable to enumerate extracted BaseBin
+		}
 		for (NSString *basebinItem in newBasebinContents) {
 			NSString *newBasebinPath = [tmpBasebinPath stringByAppendingPathComponent:basebinItem];
 			NSString *oldBasebinPath = [JBROOT_PATH(@"/basebin") stringByAppendingPathComponent:basebinItem];
-			if ([[NSFileManager defaultManager] fileExistsAtPath:oldBasebinPath]) {
-				[[NSFileManager defaultManager] removeItemAtPath:oldBasebinPath error:nil];
+			fileError = nil;
+			if ([fileManager fileExistsAtPath:oldBasebinPath] &&
+				![fileManager removeItemAtPath:oldBasebinPath error:&fileError]) {
+				[fileManager removeItemAtPath:tmpExtractionPath error:nil];
+				return 8; // Unable to replace existing BaseBin item
 			}
-			[[NSFileManager defaultManager] copyItemAtPath:newBasebinPath toPath:oldBasebinPath error:nil];
+			fileError = nil;
+			if (![fileManager copyItemAtPath:newBasebinPath toPath:oldBasebinPath error:&fileError]) {
+				[fileManager removeItemAtPath:tmpExtractionPath error:nil];
+				return 9; // Incomplete BaseBin update; never report success
+			}
 		}
-		[[NSFileManager defaultManager] removeItemAtPath:tmpExtractionPath error:nil];
+		[fileManager removeItemAtPath:tmpExtractionPath error:nil];
 
 		// Patch basebin plists
 		NSURL *basebinDaemonsURL = [NSURL fileURLWithPath:JBROOT_PATH(@"/basebin/LaunchDaemons")];

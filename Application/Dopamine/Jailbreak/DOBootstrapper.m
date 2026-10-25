@@ -76,6 +76,7 @@ NSString *const bootstrapErrorDomain = @"BootstrapErrorDomain";
     if (dctx == NULL) {
         fclose(input_file);
         fclose(output_file);
+        remove(tarPath.fileSystemRepresentation);
         return [NSError errorWithDomain:bootstrapErrorDomain code:BootstrapErrorCodeFailedDecompressing userInfo:@{NSLocalizedDescriptionKey : @"Failed to create ZSTD decompression context"}];
     }
 
@@ -85,6 +86,7 @@ NSString *const bootstrapErrorDomain = @"BootstrapErrorDomain";
         ZSTD_freeDCtx(dctx);
         fclose(input_file);
         fclose(output_file);
+        remove(tarPath.fileSystemRepresentation);
         return [NSError errorWithDomain:bootstrapErrorDomain code:BootstrapErrorCodeFailedDecompressing userInfo:@{NSLocalizedDescriptionKey : @"Failed to allocate input buffer"}];
     }
 
@@ -95,6 +97,7 @@ NSString *const bootstrapErrorDomain = @"BootstrapErrorDomain";
         ZSTD_freeDCtx(dctx);
         fclose(input_file);
         fclose(output_file);
+        remove(tarPath.fileSystemRepresentation);
         return [NSError errorWithDomain:bootstrapErrorDomain code:BootstrapErrorCodeFailedDecompressing userInfo:@{NSLocalizedDescriptionKey : @"Failed to allocate output buffer"}];
     }
 
@@ -108,6 +111,7 @@ NSString *const bootstrapErrorDomain = @"BootstrapErrorDomain";
         ZSTD_freeDCtx(dctx);
         fclose(input_file);
         fclose(output_file);
+        remove(tarPath.fileSystemRepresentation);
         return [NSError errorWithDomain:bootstrapErrorDomain code:BootstrapErrorCodeFailedDecompressing userInfo:@{NSLocalizedDescriptionKey : @"Failed to create ZSTD decompression stream"}];
     }
 
@@ -120,6 +124,7 @@ NSString *const bootstrapErrorDomain = @"BootstrapErrorDomain";
         ZSTD_freeDCtx(dctx);
         fclose(input_file);
         fclose(output_file);
+        remove(tarPath.fileSystemRepresentation);
         return [NSError errorWithDomain:bootstrapErrorDomain code:BootstrapErrorCodeFailedDecompressing userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"Failed to initialize ZSTD decompression stream: %s", ZSTD_getErrorName(ret)]}];
     }
     
@@ -142,6 +147,7 @@ NSString *const bootstrapErrorDomain = @"BootstrapErrorDomain";
                 ZSTD_freeDCtx(dctx);
                 fclose(input_file);
                 fclose(output_file);
+                remove(tarPath.fileSystemRepresentation);
                 return [NSError errorWithDomain:bootstrapErrorDomain code:BootstrapErrorCodeFailedDecompressing userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"Failed to read input file: %s", strerror(errno)]}];
             }
         }
@@ -165,6 +171,7 @@ NSString *const bootstrapErrorDomain = @"BootstrapErrorDomain";
                 ZSTD_freeDCtx(dctx);
                 fclose(input_file);
                 fclose(output_file);
+                remove(tarPath.fileSystemRepresentation);
                 return [NSError errorWithDomain:bootstrapErrorDomain code:BootstrapErrorCodeFailedDecompressing userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"Failed to decompress input data: %s", ZSTD_getErrorName(ret)]}];
             }
 
@@ -177,6 +184,7 @@ NSString *const bootstrapErrorDomain = @"BootstrapErrorDomain";
                 ZSTD_freeDCtx(dctx);
                 fclose(input_file);
                 fclose(output_file);
+                remove(tarPath.fileSystemRepresentation);
                 return [NSError errorWithDomain:bootstrapErrorDomain code:BootstrapErrorCodeFailedDecompressing userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"Failed to write output file: %s", strerror(errno)]}];
             }
 
@@ -186,13 +194,34 @@ NSString *const bootstrapErrorDomain = @"BootstrapErrorDomain";
         total_bytes_read += bytes_read;
     }
 
+    // EOF is only a valid end of a zstd stream when the last frame finished.
+    // ZSTD_decompressStream returns 0 at a frame boundary; a nonzero value
+    // means more input is required, so a truncated archive must not be used.
+    if (total_bytes_read == 0 || ret != 0) {
+        ZSTD_freeDStream(dstream);
+        free(output_buffer);
+        free(input_buffer);
+        ZSTD_freeDCtx(dctx);
+        fclose(input_file);
+        fclose(output_file);
+        remove(tarPath.fileSystemRepresentation);
+        return [NSError errorWithDomain:bootstrapErrorDomain code:BootstrapErrorCodeFailedDecompressing
+                               userInfo:@{NSLocalizedDescriptionKey : @"Incomplete ZSTD bootstrap archive"}];
+    }
+
     // Clean up resources
     ZSTD_freeDStream(dstream);
     free(output_buffer);
     free(input_buffer);
     ZSTD_freeDCtx(dctx);
     fclose(input_file);
-    fclose(output_file);
+    // fclose can surface a delayed write error even if fwrite succeeded.
+    if (fclose(output_file) != 0) {
+        int savedErrno = errno;
+        remove(tarPath.fileSystemRepresentation);
+        return [NSError errorWithDomain:bootstrapErrorDomain code:BootstrapErrorCodeFailedDecompressing
+                               userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"Failed to finish bootstrap archive: %s", strerror(savedErrno)]}];
+    }
 
     return nil;
 }
@@ -1007,17 +1036,18 @@ int getCFMajorVersion(void)
 
     ASSERT([fm fileExistsAtPath:bootstrapZstFile]);
     
-    NSString* bootstrapTarFile = [NSTemporaryDirectory() stringByAppendingPathComponent:@"bootstrap.tar"];
-    if([fm fileExistsAtPath:bootstrapTarFile])
-        ASSERT([fm removeItemAtPath:bootstrapTarFile error:nil]);
-    
+    NSString* bootstrapTarFile = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                                 [NSString stringWithFormat:@"bootstrap-%@.tar", NSUUID.UUID.UUIDString]];
+
     NSError* error = [self decompressZstd:bootstrapZstFile toTar:bootstrapTarFile];
     if(error) {
+        [fm removeItemAtPath:bootstrapTarFile error:nil];
         completion(error);
         return -1;
     }
-    
+
     NSError* decompressionError = [self extractTar:bootstrapTarFile toPath:jbroot_path];
+    [fm removeItemAtPath:bootstrapTarFile error:nil];
     if (decompressionError) {
         completion(decompressionError);
         return -1;
@@ -1426,8 +1456,14 @@ int getCFMajorVersion(void)
     }
 
     
-    [[NSString stringWithFormat:@"%d",DOPAMINE_INSTALL_VERSION] writeToFile:jbrootPrefix(@"/.installed_dopamine") atomically:YES encoding:NSUTF8StringEncoding error:nil];
-    
+    NSError *markerError = nil;
+    if (![[NSString stringWithFormat:@"%d", DOPAMINE_INSTALL_VERSION]
+          writeToFile:jbrootPrefix(@"/.installed_dopamine") atomically:YES
+          encoding:NSUTF8StringEncoding error:&markerError]) {
+        return markerError ?: [NSError errorWithDomain:bootstrapErrorDomain
+                                                 code:BootstrapErrorCodeFailedFinalising
+                                             userInfo:@{NSLocalizedDescriptionKey : @"Failed to save Bootstrap installation marker"}];
+    }
 
     return nil;
 }
@@ -1439,23 +1475,20 @@ int getCFMajorVersion(void)
     NSError* error=nil;
     NSFileManager* fm = NSFileManager.defaultManager;
     
-    NSString* dirpath = @"/var/containers/Bundle/Application/";
-    for(NSString* item in [fm directoryContentsAtPath:dirpath])
-    {
-        if(is_jbroot_name(item.UTF8String)) {
-            STRAPLOG("remove %@ @ %@", item, dirpath);
-            if(![fm removeItemAtPath:[dirpath stringByAppendingPathComponent:item] error:&error])
-                return error;
+    for (NSString* dirpath in @[@"/var/containers/Bundle/Application/",
+                               @"/var/mobile/Containers/Shared/AppGroup/"]) {
+        NSArray<NSString *> *items = [fm contentsOfDirectoryAtPath:dirpath error:&error];
+        if (!items) {
+            return error ?: [NSError errorWithDomain:bootstrapErrorDomain
+                                               code:BootstrapErrorCodeFailedReplacing
+                                           userInfo:@{NSLocalizedDescriptionKey : [NSString stringWithFormat:@"Failed to enumerate Bootstrap directory %@", dirpath]}];
         }
-    }
-    
-    dirpath = @"/var/mobile/Containers/Shared/AppGroup/";
-    for(NSString* item in [fm directoryContentsAtPath:dirpath])
-    {
-        if(is_jbroot_name(item.UTF8String)) {
-            STRAPLOG("remove %@ @ %@", item, dirpath);
-            if(![fm removeItemAtPath:[dirpath stringByAppendingPathComponent:item] error:&error])
-                return error;
+        for (NSString* item in items) {
+            if (is_jbroot_name(item.UTF8String)) {
+                STRAPLOG("remove %@ @ %@", item, dirpath);
+                if (![fm removeItemAtPath:[dirpath stringByAppendingPathComponent:item] error:&error])
+                    return error;
+            }
         }
     }
     
