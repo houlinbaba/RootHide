@@ -1749,7 +1749,7 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
     DOHeaderView *headerView = [[DOHeaderView alloc] initWithImage: [UIImage imageNamed:@"Dopamine"] subtitles: @[
         [DOGlobalAppearance mainSubtitleString:[[DOEnvironmentManager sharedManager] versionSupportString]],
         [DOGlobalAppearance secondarySubtitleString:DOLocalizedString(@"Credits_Made_By") withAlpha:0.8],
-        [DOGlobalAppearance secondarySubtitleString:@" " withAlpha:0.8]
+        [DOGlobalAppearance secondarySubtitleString:@"alin16.4.1 专用版" withAlpha:0.8]
     ]];
     
     [stackView addArrangedSubview:headerView];
@@ -2357,7 +2357,7 @@ static void DOCustomGlassExportLivePhoto(PHLivePhoto *livePhoto,
     DOHeaderView *headerView = [[DOHeaderView alloc] initWithImage:[UIImage imageNamed:@"Dopamine"] subtitles:@[
         [DOGlobalAppearance mainSubtitleString:[[DOEnvironmentManager sharedManager] versionSupportString]],
         [DOGlobalAppearance secondarySubtitleString:DOLocalizedString(@"Credits_Made_By") withAlpha:0.8],
-        [DOGlobalAppearance secondarySubtitleString:@" " withAlpha:0.8]
+        [DOGlobalAppearance secondarySubtitleString:@"alin16.4.1 专用版" withAlpha:0.8]
     ]];
     [self configureCustomGlassHeaderView:headerView logoHeight:logoHeight subtitleScale:headerSubtitleScale];
 
