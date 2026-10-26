@@ -29,11 +29,7 @@ endif
 	mkdir -p build/Build/Products/Debug-iphoneos/Dopamine.app/Base.lproj
 	cp -a Dopamine/Prebuilt/Base.lproj/LaunchScreen.storyboardc build/Build/Products/Debug-iphoneos/Dopamine.app/Base.lproj/
 	cp -a Dopamine/Resources/*.deb build/Build/Products/Debug-iphoneos/Dopamine.app/
-	for framework in Titan; do \
-		rm -rf build/Build/Products/Debug-iphoneos/Dopamine.app/Frameworks/$$framework.framework; \
-		cp -a Dopamine/Prebuilt/Frameworks/$$framework.framework build/Build/Products/Debug-iphoneos/Dopamine.app/Frameworks/; \
-	done
-	rm -rf build/Build/Products/Debug-iphoneos/Dopamine.app/Frameworks/dmaFail.framework
+	# alin16.4.1 slim: keep Xcode-built dmaFail as PPL bypass, do not copy Prebuilt Titan/ClearSword/DarkSword/momentarius
 
 
 clean:
